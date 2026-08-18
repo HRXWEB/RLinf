@@ -14,6 +14,7 @@
 
 from .dosw1 import DOSW1Config, DOSW1Env
 from .dosw1 import tasks as dosw1_tasks
+from .f1 import tasks as f1_tasks
 from .franka import FrankaEnv, FrankaRobotConfig, FrankaRobotState
 from .franka import tasks as franka_tasks
 from .franka.dual_franka_env import DualFrankaEnv, DualFrankaRobotConfig
@@ -46,6 +47,7 @@ __all__ = [
     "FrankaEnv",
     "FrankaRobotConfig",
     "FrankaRobotState",
+    "f1_tasks",
     "franka_tasks",
     "GimArmEnv",
     "GimArmRobotConfig",
