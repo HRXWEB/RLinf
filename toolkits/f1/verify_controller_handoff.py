@@ -17,10 +17,27 @@
 import argparse
 import hashlib
 import json
-from pathlib import Path
+import re
+from email.parser import BytesParser
+from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
+from zipfile import BadZipFile, ZipFile
 
 EXPECTED_API_CONTRACT = "docs/api-contract-0.1.0.md"
 EXPECTED_PACKAGE_VERSION = "0.1.0"
+EXPECTED_WHEEL_PATH = "dist/f1_robot_controller-0.1.0-py3-none-any.whl"
+EXPECTED_WHEEL_NAME = "f1-robot-controller"
+EXPECTED_FIELDS = frozenset(
+    {
+        "api_contract_path",
+        "package_version",
+        "python_version",
+        "release_commit",
+        "repository_url",
+        "wheel_path",
+        "wheel_sha256",
+    }
+)
 
 
 def _load_handoff(handoff_path: Path) -> dict[str, object]:
@@ -42,6 +59,139 @@ def _wheel_sha256(wheel_path: Path) -> str:
     return digest.hexdigest()
 
 
+def _validate_schema(payload: dict[str, object]) -> dict[str, str]:
+    """Validate the handoff fields and return their string values."""
+
+    missing_fields = EXPECTED_FIELDS - payload.keys()
+    if missing_fields:
+        missing_field = sorted(missing_fields)[0]
+        label = "API contract" if missing_field == "api_contract_path" else "field"
+        raise ValueError(f"controller handoff {label} {missing_field} is missing")
+    extra_fields = payload.keys() - EXPECTED_FIELDS
+    if extra_fields:
+        raise ValueError(
+            f"controller handoff contains unrecognized field {sorted(extra_fields)[0]}"
+        )
+
+    string_payload: dict[str, str] = {}
+    for field in EXPECTED_FIELDS:
+        value = payload[field]
+        if not isinstance(value, str):
+            raise ValueError(f"controller handoff field {field} must be a string")
+        string_payload[field] = value
+    return string_payload
+
+
+def _is_repository_url(value: str) -> bool:
+    """Return whether ``value`` resembles a URL or SSH repository location."""
+
+    if "://" in value:
+        parsed = urlsplit(value)
+        return (
+            parsed.scheme in {"http", "https", "ssh"}
+            and parsed.hostname is not None
+            and parsed.path not in {"", "/"}
+        )
+    return re.fullmatch(r"(?:[^@\s/:]+@)?[^@\s/:]+:[^\s]+", value) is not None
+
+
+def _validate_provenance(payload: dict[str, str]) -> None:
+    """Validate immutable controller release provenance."""
+
+    repository_url = payload["repository_url"]
+    if not _is_repository_url(repository_url):
+        raise ValueError(
+            "controller handoff repository_url is not a valid repository URL"
+        )
+
+    release_commit = payload["release_commit"]
+    if re.fullmatch(r"[0-9a-f]{40}", release_commit) is None:
+        raise ValueError(
+            "controller handoff release_commit must be 40 lowercase hex characters"
+        )
+
+    package_version = payload["package_version"]
+    if package_version != EXPECTED_PACKAGE_VERSION:
+        raise ValueError(
+            "controller handoff package version (package_version) must be "
+            f"{EXPECTED_PACKAGE_VERSION}, got {package_version!r}"
+        )
+
+    python_version = payload["python_version"]
+    if re.fullmatch(r"3\.12\.\d+", python_version) is None:
+        raise ValueError(
+            "controller handoff python_version must be a stable Python 3.12.x version"
+        )
+
+    api_contract_path = payload["api_contract_path"]
+    if api_contract_path != EXPECTED_API_CONTRACT:
+        raise ValueError(
+            "controller handoff API contract (api_contract_path) must be "
+            f"{EXPECTED_API_CONTRACT}"
+        )
+
+    recorded_wheel_path = payload["wheel_path"]
+    posix_wheel_path = PurePosixPath(recorded_wheel_path)
+    if (
+        posix_wheel_path.is_absolute()
+        or ".." in posix_wheel_path.parts
+        or recorded_wheel_path != EXPECTED_WHEEL_PATH
+    ):
+        raise ValueError(
+            f"controller handoff wheel_path must be exactly {EXPECTED_WHEEL_PATH}"
+        )
+
+    wheel_sha256 = payload["wheel_sha256"]
+    if re.fullmatch(r"[0-9a-f]{64}", wheel_sha256) is None:
+        raise ValueError(
+            "controller handoff wheel_sha256 must be 64 lowercase hex characters"
+        )
+
+
+def _flattened_wheel(handoff_path: Path) -> Path:
+    """Return the verified non-symlink wheel copied beside the handoff."""
+
+    wheel_name = PurePosixPath(EXPECTED_WHEEL_PATH).name
+    wheel_path = handoff_path.parent / wheel_name
+    if wheel_path.is_symlink() or not wheel_path.is_file():
+        raise ValueError(
+            "flattened controller wheel must be a regular non-symlink file "
+            "beside the handoff"
+        )
+    resolved_wheel = wheel_path.resolve(strict=True)
+    if resolved_wheel.parent != handoff_path.parent:
+        raise ValueError("flattened controller wheel must remain beside the handoff")
+    return resolved_wheel
+
+
+def _validate_wheel_identity(wheel_path: Path) -> None:
+    """Validate the distribution name and version in wheel METADATA."""
+
+    try:
+        with ZipFile(wheel_path) as archive:
+            metadata_paths = [
+                name
+                for name in archive.namelist()
+                if name.endswith(".dist-info/METADATA")
+            ]
+            if len(metadata_paths) != 1:
+                raise ValueError(
+                    "controller wheel must contain exactly one METADATA file"
+                )
+            metadata = BytesParser().parsebytes(archive.read(metadata_paths[0]))
+    except BadZipFile as error:
+        raise ValueError("controller wheel must be a valid wheel archive") from error
+
+    if metadata["Name"] != EXPECTED_WHEEL_NAME:
+        raise ValueError(
+            f"controller wheel METADATA Name must be {EXPECTED_WHEEL_NAME}"
+        )
+    if metadata["Version"] != EXPECTED_PACKAGE_VERSION:
+        raise ValueError(
+            f"controller wheel METADATA Version must be {EXPECTED_PACKAGE_VERSION}"
+        )
+
+
 def verify_handoff(handoff_path: Path) -> Path:
     """Validate a phase-one controller handoff and return its wheel path.
 
@@ -57,27 +207,12 @@ def verify_handoff(handoff_path: Path) -> Path:
     """
 
     handoff_path = handoff_path.resolve()
-    payload = _load_handoff(handoff_path)
+    payload = _validate_schema(_load_handoff(handoff_path))
+    _validate_provenance(payload)
+    wheel_path = _flattened_wheel(handoff_path)
+    _validate_wheel_identity(wheel_path)
 
-    package_version = payload.get("package_version")
-    if package_version != EXPECTED_PACKAGE_VERSION:
-        raise ValueError(
-            "controller handoff package version must be "
-            f"{EXPECTED_PACKAGE_VERSION}, got {package_version!r}"
-        )
-
-    api_contract_path = payload.get("api_contract_path")
-    if api_contract_path != EXPECTED_API_CONTRACT:
-        raise ValueError(
-            f"controller handoff API contract must be {EXPECTED_API_CONTRACT}"
-        )
-
-    recorded_wheel_path = payload.get("wheel_path")
-    if not isinstance(recorded_wheel_path, str) or not recorded_wheel_path:
-        raise ValueError("controller handoff wheel path is missing")
-    wheel_path = (handoff_path.parent / Path(recorded_wheel_path).name).resolve()
-
-    expected_sha256 = payload.get("wheel_sha256")
+    expected_sha256 = payload["wheel_sha256"]
     actual_sha256 = _wheel_sha256(wheel_path)
     if actual_sha256 != expected_sha256:
         raise ValueError(
