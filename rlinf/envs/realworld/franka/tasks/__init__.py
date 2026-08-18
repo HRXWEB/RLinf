@@ -17,7 +17,6 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 import gymnasium as gym
-from gymnasium.envs.registration import register
 
 from rlinf.envs.realworld.common.wrappers import (
     apply_dual_franka_joint_wrappers,
@@ -41,6 +40,7 @@ from rlinf.envs.realworld.franka.tasks.franka_bin_relocation import (
 from rlinf.envs.realworld.franka.tasks.peg_insertion_env import (
     PegInsertionEnv as PegInsertionEnv,
 )
+from rlinf.envs.realworld.registration import register_legacy_task
 
 
 def create_franka_env(
@@ -155,37 +155,37 @@ def create_dexpnp_env(
     return apply_single_arm_wrappers(env, env_cfg)
 
 
-register(
-    id="FrankaEnv-v1",
-    entry_point="rlinf.envs.realworld.franka.tasks:create_franka_env",
+register_legacy_task(
+    "FrankaEnv-v1",
+    "rlinf.envs.realworld.franka.tasks:create_franka_env",
 )
 
-register(
-    id="DualFrankaJointEnv-v1",
-    entry_point="rlinf.envs.realworld.franka.tasks:create_dual_franka_joint_env",
+register_legacy_task(
+    "DualFrankaJointEnv-v1",
+    "rlinf.envs.realworld.franka.tasks:create_dual_franka_joint_env",
 )
 
-register(
-    id="DualFrankaTCPEnv-v1",
-    entry_point="rlinf.envs.realworld.franka.tasks:create_dual_franka_tcp_env",
+register_legacy_task(
+    "DualFrankaTCPEnv-v1",
+    "rlinf.envs.realworld.franka.tasks:create_dual_franka_tcp_env",
 )
 
-register(
-    id="PegInsertionEnv-v1",
-    entry_point="rlinf.envs.realworld.franka.tasks:create_peg_insertion_env",
+register_legacy_task(
+    "PegInsertionEnv-v1",
+    "rlinf.envs.realworld.franka.tasks:create_peg_insertion_env",
 )
 
-register(
-    id="FrankaBinRelocationEnv-v1",
-    entry_point="rlinf.envs.realworld.franka.tasks:create_franka_bin_relocation_env",
+register_legacy_task(
+    "FrankaBinRelocationEnv-v1",
+    "rlinf.envs.realworld.franka.tasks:create_franka_bin_relocation_env",
 )
 
-register(
-    id="BottleEnv-v1",
-    entry_point="rlinf.envs.realworld.franka.tasks:create_bottle_env",
+register_legacy_task(
+    "BottleEnv-v1",
+    "rlinf.envs.realworld.franka.tasks:create_bottle_env",
 )
 
-register(
-    id="DexpnpEnv-v1",
-    entry_point="rlinf.envs.realworld.franka.tasks:create_dexpnp_env",
+register_legacy_task(
+    "DexpnpEnv-v1",
+    "rlinf.envs.realworld.franka.tasks:create_dexpnp_env",
 )

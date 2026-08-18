@@ -12,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from gymnasium.envs.registration import register
-
 from rlinf.envs.realworld.gim_arm.tasks.peg_insertion import (
     GimArmPegInsertionEnv as GimArmPegInsertionEnv,
 )
+from rlinf.envs.realworld.registration import register_legacy_task
 
-register(
-    id="GimArmPegInsertionEnv-v1",
-    entry_point="rlinf.envs.realworld.gim_arm.tasks:GimArmPegInsertionEnv",
+register_legacy_task(
+    "GimArmPegInsertionEnv-v1",
+    "rlinf.envs.realworld.gim_arm.tasks:GimArmPegInsertionEnv",
 )

@@ -13,13 +13,7 @@
 # limitations under the License.
 
 import copy
-import importlib
-import os
-import pathlib
-import time
-from collections.abc import Callable
 from functools import partial
-from threading import Lock
 from typing import TYPE_CHECKING, OrderedDict
 
 import gymnasium as gym
@@ -27,47 +21,16 @@ import numpy as np
 import torch
 from omegaconf import OmegaConf
 
+from rlinf.envs.realworld.registration import (
+    F1_ENV_ID,
+    ensure_legacy_setup,
+    legacy_node_setup,
+)
 from rlinf.envs.realworld.venv import NoAutoResetSyncVectorEnv
 from rlinf.envs.utils import to_tensor
 
 if TYPE_CHECKING:
     from rlinf.scheduler import WorkerInfo
-
-
-_F1_ENV_ID = "F1DualArmPegInsertionEnv-v1"
-_LEGACY_TASK_MODULES = {
-    "DOSW1PickEnv-v1": "rlinf.envs.realworld.dosw1.tasks",
-    "FrankaEnv-v1": "rlinf.envs.realworld.franka.tasks",
-    "DualFrankaJointEnv-v1": "rlinf.envs.realworld.franka.tasks",
-    "DualFrankaTCPEnv-v1": "rlinf.envs.realworld.franka.tasks",
-    "PegInsertionEnv-v1": "rlinf.envs.realworld.franka.tasks",
-    "FrankaBinRelocationEnv-v1": "rlinf.envs.realworld.franka.tasks",
-    "BottleEnv-v1": "rlinf.envs.realworld.franka.tasks",
-    "DexpnpEnv-v1": "rlinf.envs.realworld.franka.tasks",
-    "GimArmPegInsertionEnv-v1": "rlinf.envs.realworld.gim_arm.tasks",
-    "ButtonEnv-v1": "rlinf.envs.realworld.xsquare.tasks",
-}
-_LEGACY_SETUP_LOCK = Lock()
-_legacy_setup_complete = False
-
-
-def _load_task_registration(env_id: str, setup: Callable[[], None]) -> None:
-    """Load only the robot stack selected by a RealWorld task ID."""
-
-    if env_id == _F1_ENV_ID:
-        importlib.import_module("rlinf.envs.realworld.f1.tasks")
-        return
-
-    module_name = _LEGACY_TASK_MODULES.get(env_id)
-    if module_name is None:
-        return
-    importlib.import_module(module_name)
-
-    global _legacy_setup_complete
-    with _LEGACY_SETUP_LOCK:
-        if not _legacy_setup_complete:
-            setup()
-            _legacy_setup_complete = True
 
 
 class RealWorldEnv(gym.Env):
@@ -119,7 +82,8 @@ class RealWorldEnv(gym.Env):
         self._init_reset_state_ids()
 
     def _create_env(self, env_idx: int):
-        _load_task_registration(self.cfg.init_params.id, self.realworld_setup)
+        if self.cfg.init_params.id != F1_ENV_ID:
+            ensure_legacy_setup(self.realworld_setup)
         worker_info: WorkerInfo = self.worker_info
         hardware_info = None
         if worker_info is not None and env_idx < len(worker_info.hardware_infos):
@@ -145,22 +109,7 @@ class RealWorldEnv(gym.Env):
 
         This function is called once per process when a legacy task is selected.
         """
-        import psutil
-        from filelock import FileLock
-
-        # Concurrency control is needed for multiple processes on the same node
-        node_lock_file = "/tmp/.realworld.lock"
-        # Check if the path is valid
-        if not os.path.exists(os.path.dirname(node_lock_file)):
-            node_lock_file = os.path.join(pathlib.Path.home(), ".realworld.lock")
-        node_lock = FileLock(node_lock_file)
-
-        with node_lock:
-            ros_proc_names = ["roscore", "rosmaster", "rosout"]
-            for proc in psutil.process_iter():
-                if proc.name() in ros_proc_names:
-                    proc.kill()
-                    time.sleep(0.5)
+        legacy_node_setup()
 
     def _init_env(self):
         env_fns = [

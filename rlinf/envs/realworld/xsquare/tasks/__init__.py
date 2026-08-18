@@ -17,9 +17,9 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 import gymnasium as gym
-from gymnasium.envs.registration import register
 
 from rlinf.envs.realworld.common.wrappers import apply_single_arm_wrappers
+from rlinf.envs.realworld.registration import register_legacy_task
 from rlinf.envs.realworld.xsquare.tasks.button_env import (
     ButtonEnv as ButtonEnv,
 )
@@ -41,7 +41,7 @@ def create_button_env(
     return apply_single_arm_wrappers(env, env_cfg)
 
 
-register(
-    id="ButtonEnv-v1",
-    entry_point="rlinf.envs.realworld.xsquare.tasks:create_button_env",
+register_legacy_task(
+    "ButtonEnv-v1",
+    "rlinf.envs.realworld.xsquare.tasks:create_button_env",
 )

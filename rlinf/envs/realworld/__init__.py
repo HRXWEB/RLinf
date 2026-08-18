@@ -18,6 +18,9 @@ from importlib import import_module
 from typing import Any
 
 from .f1 import tasks as f1_tasks
+from .registration import register_legacy_proxies
+
+register_legacy_proxies()
 
 _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
     "DualFrankaEnv": (".franka.dual_franka_env", "DualFrankaEnv"),

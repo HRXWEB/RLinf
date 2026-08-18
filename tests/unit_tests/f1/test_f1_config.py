@@ -30,12 +30,35 @@ import pytest
 from f1_robot_controller import ControllerConfig, create_controller
 from gymnasium.envs.registration import registry
 from hydra import compose, initialize_config_dir
+from omegaconf import open_dict
 
 ROOT = Path(__file__).resolve().parents[3]
 CONFIG_ROOT = ROOT / "examples" / "embodiment" / "config"
 CONFIG_NAME = "realworld_dummy_f1_peg_sac_cnn_async"
 ENV_ID = "F1DualArmPegInsertionEnv-v1"
 LEGACY_ENV_ID = "F1DualArmPegInsertionEnv-v0"
+LEGACY_SPECS = {
+    "DOSW1PickEnv-v1": "rlinf.envs.realworld.dosw1.tasks:create_dosw1_pick_env",
+    "FrankaEnv-v1": "rlinf.envs.realworld.franka.tasks:create_franka_env",
+    "DualFrankaJointEnv-v1": (
+        "rlinf.envs.realworld.franka.tasks:create_dual_franka_joint_env"
+    ),
+    "DualFrankaTCPEnv-v1": (
+        "rlinf.envs.realworld.franka.tasks:create_dual_franka_tcp_env"
+    ),
+    "PegInsertionEnv-v1": (
+        "rlinf.envs.realworld.franka.tasks:create_peg_insertion_env"
+    ),
+    "FrankaBinRelocationEnv-v1": (
+        "rlinf.envs.realworld.franka.tasks:create_franka_bin_relocation_env"
+    ),
+    "BottleEnv-v1": "rlinf.envs.realworld.franka.tasks:create_bottle_env",
+    "DexpnpEnv-v1": "rlinf.envs.realworld.franka.tasks:create_dexpnp_env",
+    "GimArmPegInsertionEnv-v1": (
+        "rlinf.envs.realworld.gim_arm.tasks:GimArmPegInsertionEnv"
+    ),
+    "ButtonEnv-v1": "rlinf.envs.realworld.xsquare.tasks:create_button_env",
+}
 F1_STATE_ORDER = [
     "left_joint_position",
     "left_gripper",
@@ -64,14 +87,14 @@ def _compose_config(monkeypatch: pytest.MonkeyPatch) -> Any:
 
 @pytest.fixture
 def registered_f1(monkeypatch: pytest.MonkeyPatch) -> Iterator[ModuleType]:
-    registry.pop(ENV_ID, None)
-    registry.pop(LEGACY_ENV_ID, None)
+    for env_id in (ENV_ID, LEGACY_ENV_ID, *LEGACY_SPECS):
+        registry.pop(env_id, None)
     module = _load_realworld_package(monkeypatch)
     try:
         yield module
     finally:
-        registry.pop(ENV_ID, None)
-        registry.pop(LEGACY_ENV_ID, None)
+        for env_id in (ENV_ID, LEGACY_ENV_ID, *LEGACY_SPECS):
+            registry.pop(env_id, None)
 
 
 def _make_env(
@@ -214,6 +237,11 @@ def test_importing_realworld_is_f1_only_and_has_no_process_side_effects() -> Non
         )
         print(json.dumps({{
             "entry_point": gym.spec({ENV_ID!r}).entry_point,
+            "legacy_ids": sorted(
+                env_id
+                for env_id in {sorted(LEGACY_SPECS)!r}
+                if gym.spec(env_id) is not None
+            ),
             "forbidden": forbidden,
             "process_calls": process_calls,
             "exports": list(realworld.__all__),
@@ -233,6 +261,7 @@ def test_importing_realworld_is_f1_only_and_has_no_process_side_effects() -> Non
     assert payload["entry_point"] == (
         "rlinf.envs.realworld.f1.tasks:DualArmPegInsertionEnv"
     )
+    assert payload["legacy_ids"] == sorted(LEGACY_SPECS)
     assert payload["forbidden"] == []
     assert payload["process_calls"] == []
     assert payload["exports"] == [
@@ -263,6 +292,129 @@ def test_importing_realworld_is_f1_only_and_has_no_process_side_effects() -> Non
 
     with pytest.raises(gym.error.Error):
         gym.spec(LEGACY_ENV_ID)
+
+
+def test_direct_legacy_gym_factory_runs_setup_once_before_construction(
+    registered_f1: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del registered_f1
+    order: list[str] = []
+    received_kwargs: list[dict[str, object]] = []
+
+    class ControlledLegacyEnv(gym.Env):
+        metadata = {"render_modes": []}
+        action_space = gym.spaces.Box(-1.0, 1.0, shape=(1,), dtype=np.float32)
+        observation_space = gym.spaces.Box(
+            -1.0,
+            1.0,
+            shape=(1,),
+            dtype=np.float32,
+        )
+
+    def create_franka_env(**kwargs: object) -> gym.Env:
+        order.append("constructor")
+        assert order[0] == "setup"
+        received_kwargs.append(kwargs)
+        return ControlledLegacyEnv()
+
+    tasks_module = ModuleType("rlinf.envs.realworld.franka.tasks")
+    tasks_module.create_franka_env = create_franka_env
+    monkeypatch.setitem(
+        sys.modules,
+        "rlinf.envs.realworld.franka.tasks",
+        tasks_module,
+    )
+
+    import psutil
+
+    def process_iter() -> list[object]:
+        order.append("setup")
+        return []
+
+    monkeypatch.setattr(psutil, "process_iter", process_iter)
+    factory_kwargs = {
+        "override_cfg": {"is_dummy": True},
+        "worker_info": None,
+        "hardware_info": None,
+        "env_idx": 3,
+        "env_cfg": {"sentinel": "preserved"},
+    }
+
+    first = gym.make("FrankaEnv-v1", **factory_kwargs)
+    second = gym.make("FrankaEnv-v1", **factory_kwargs)
+    try:
+        assert order == ["setup", "constructor", "constructor"]
+        assert received_kwargs == [factory_kwargs, factory_kwargs]
+    finally:
+        first.close()
+        second.close()
+
+
+def test_explicit_legacy_tasks_import_keeps_the_lightweight_proxy_registration(
+    registered_f1: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxy_entry_point = gym.spec("GimArmPegInsertionEnv-v1").entry_point
+    gim_arm_package = ModuleType("rlinf.envs.realworld.gim_arm")
+    gim_arm_package.__package__ = "rlinf.envs.realworld.gim_arm"
+    gim_arm_package.__path__ = [str(ROOT / "rlinf" / "envs" / "realworld" / "gim_arm")]
+    monkeypatch.setitem(
+        sys.modules,
+        "rlinf.envs.realworld.gim_arm",
+        gim_arm_package,
+    )
+    peg_module = ModuleType("rlinf.envs.realworld.gim_arm.tasks.peg_insertion")
+    peg_module.GimArmPegInsertionEnv = type("ControlledGimArmEnv", (), {})
+    monkeypatch.setitem(
+        sys.modules,
+        "rlinf.envs.realworld.gim_arm.tasks.peg_insertion",
+        peg_module,
+    )
+
+    tasks_module = registered_f1.gim_arm_tasks
+
+    assert tasks_module.__name__ == "rlinf.envs.realworld.gim_arm.tasks"
+    assert gym.spec("GimArmPegInsertionEnv-v1").entry_point == proxy_entry_point
+    for export_name, module_name in (
+        ("dosw1_tasks", "rlinf.envs.realworld.dosw1.tasks"),
+        ("franka_tasks", "rlinf.envs.realworld.franka.tasks"),
+        ("xsquare_tasks", "rlinf.envs.realworld.xsquare.tasks"),
+    ):
+        controlled_tasks = ModuleType(module_name)
+        monkeypatch.setitem(sys.modules, module_name, controlled_tasks)
+        assert getattr(registered_f1, export_name) is controlled_tasks
+
+
+def test_parent_import_rejects_a_conflicting_legacy_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for env_id in (ENV_ID, LEGACY_ENV_ID, *LEGACY_SPECS):
+        registry.pop(env_id, None)
+    gym.register("FrankaEnv-v1", entry_point="conflicting.module:factory")
+    try:
+        with pytest.raises(RuntimeError, match="FrankaEnv-v1"):
+            _load_realworld_package(monkeypatch)
+    finally:
+        for env_id in (ENV_ID, LEGACY_ENV_ID, *LEGACY_SPECS):
+            registry.pop(env_id, None)
+
+
+def test_parent_import_normalizes_an_exact_legacy_registration_to_its_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for env_id in (ENV_ID, LEGACY_ENV_ID, *LEGACY_SPECS):
+        registry.pop(env_id, None)
+    gym.register("FrankaEnv-v1", entry_point=LEGACY_SPECS["FrankaEnv-v1"])
+    try:
+        _load_realworld_package(monkeypatch)
+
+        assert gym.spec("FrankaEnv-v1").entry_point == (
+            "rlinf.envs.realworld.registration:create_franka_env"
+        )
+    finally:
+        for env_id in (ENV_ID, LEGACY_ENV_ID, *LEGACY_SPECS):
+            registry.pop(env_id, None)
 
 
 def test_each_gym_make_uses_its_own_dynamic_operator_config(
@@ -411,6 +563,107 @@ def test_composed_config_runs_realworld_env_through_the_four_step_horizon(
         )
     finally:
         env.close()
+
+
+def test_custom_realworld_id_runs_legacy_setup_once_before_each_constructor(
+    registered_f1: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del registered_f1
+    custom_env_id = "Task5ControlledRealWorld-v0"
+    order: list[str] = []
+
+    class ControlledRealWorldTask(gym.Env):
+        metadata = {"render_modes": []}
+
+        def __init__(
+            self,
+            override_cfg: Mapping[str, object],
+            worker_info: object,
+            hardware_info: object,
+            env_idx: int,
+            env_cfg: Mapping[str, object],
+        ) -> None:
+            del override_cfg, worker_info, hardware_info, env_idx, env_cfg
+            order.append("constructor")
+            assert order[0] == "setup"
+            self.action_space = gym.spaces.Box(
+                -1.0,
+                1.0,
+                shape=(16,),
+                dtype=np.float32,
+            )
+            self.observation_space = gym.spaces.Dict(
+                {
+                    "state": gym.spaces.Dict(
+                        {
+                            "left_joint_position": gym.spaces.Box(
+                                -np.inf,
+                                np.inf,
+                                shape=(7,),
+                                dtype=np.float32,
+                            ),
+                            "left_gripper": gym.spaces.Box(
+                                0.0,
+                                1.0,
+                                shape=(1,),
+                                dtype=np.float32,
+                            ),
+                            "right_joint_position": gym.spaces.Box(
+                                -np.inf,
+                                np.inf,
+                                shape=(7,),
+                                dtype=np.float32,
+                            ),
+                            "right_gripper": gym.spaces.Box(
+                                0.0,
+                                1.0,
+                                shape=(1,),
+                                dtype=np.float32,
+                            ),
+                        }
+                    ),
+                    "frames": gym.spaces.Dict(
+                        {
+                            key: gym.spaces.Box(
+                                0,
+                                255,
+                                shape=(128, 128, 3),
+                                dtype=np.uint8,
+                            )
+                            for key in (
+                                "head_color",
+                                "left_wrist_color",
+                                "right_wrist_color",
+                            )
+                        }
+                    ),
+                }
+            )
+            self.task_description = "controlled legacy task"
+
+    import psutil
+
+    def process_iter() -> list[object]:
+        order.append("setup")
+        return []
+
+    monkeypatch.setattr(psutil, "process_iter", process_iter)
+    gym.register(custom_env_id, entry_point=ControlledRealWorldTask)
+    cfg = _compose_config(monkeypatch)
+    with open_dict(cfg.env.train.init_params):
+        cfg.env.train.init_params.id = custom_env_id
+    from rlinf.envs import get_env_cls
+
+    env_cls = get_env_cls("realworld", cfg.env.train)
+    first = env_cls(cfg.env.train, 1, 0, 1, None)
+    second = env_cls(cfg.env.train, 1, 1, 1, None)
+    try:
+        assert order == ["setup", "constructor", "constructor"]
+    finally:
+        first.env.close()
+        second.env.close()
+        registry.pop(custom_env_id, None)
 
 
 def test_manual_mode_never_approves_robot_reset_automatically(
