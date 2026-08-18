@@ -14,8 +14,11 @@
 
 """Integration coverage for the F1 Gym registration and Hydra config."""
 
-import importlib.util
+import importlib
+import json
+import subprocess
 import sys
+import textwrap
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import ModuleType
@@ -41,144 +44,22 @@ F1_STATE_ORDER = [
 ]
 
 
-def _namespace_package(name: str, path: Path) -> ModuleType:
-    package = ModuleType(name)
-    package.__path__ = [str(path)]
-    package.__package__ = name
-    return package
-
-
-def _stub_module(
-    monkeypatch: pytest.MonkeyPatch,
-    name: str,
-    *,
-    package: bool = False,
-    **attributes: object,
-) -> ModuleType:
-    module = ModuleType(name)
-    module.__package__ = name if package else name.rpartition(".")[0]
-    if package:
-        module.__path__ = []
-    for attribute, value in attributes.items():
-        setattr(module, attribute, value)
-    monkeypatch.setitem(sys.modules, name, module)
-    return module
-
-
-class _StubRealWorldEnv:
-    @staticmethod
-    def realworld_setup() -> None:
-        pass
-
-
 def _load_realworld_package(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    """Load the real package init while stubbing unrelated robot stacks."""
+    """Reload the real package and its F1 registration without dependency stubs."""
 
-    realworld_dir = ROOT / "rlinf" / "envs" / "realworld"
-    monkeypatch.setitem(
-        sys.modules, "rlinf", _namespace_package("rlinf", ROOT / "rlinf")
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "rlinf.envs",
-        _namespace_package("rlinf.envs", ROOT / "rlinf" / "envs"),
-    )
+    monkeypatch.syspath_prepend(str(ROOT))
+    envs_package = importlib.import_module("rlinf.envs")
+    monkeypatch.delattr(envs_package, "realworld", raising=False)
     for name in tuple(sys.modules):
         if name.startswith("rlinf.envs.realworld"):
             monkeypatch.delitem(sys.modules, name, raising=False)
+    return importlib.import_module("rlinf.envs.realworld")
 
-    placeholder = type("StubRobot", (), {})
-    dosw1_tasks = _stub_module(
-        monkeypatch,
-        "rlinf.envs.realworld.dosw1.tasks",
-        package=True,
-    )
-    _stub_module(
-        monkeypatch,
-        "rlinf.envs.realworld.dosw1",
-        package=True,
-        DOSW1Config=placeholder,
-        DOSW1Env=placeholder,
-        tasks=dosw1_tasks,
-    )
-    franka_tasks = _stub_module(
-        monkeypatch,
-        "rlinf.envs.realworld.franka.tasks",
-        package=True,
-    )
-    _stub_module(
-        monkeypatch,
-        "rlinf.envs.realworld.franka",
-        package=True,
-        FrankaEnv=placeholder,
-        FrankaRobotConfig=placeholder,
-        FrankaRobotState=placeholder,
-        tasks=franka_tasks,
-    )
-    _stub_module(
-        monkeypatch,
-        "rlinf.envs.realworld.franka.dual_franka_env",
-        DualFrankaEnv=placeholder,
-        DualFrankaRobotConfig=placeholder,
-    )
-    _stub_module(
-        monkeypatch,
-        "rlinf.envs.realworld.franka.tasks.dual_franka_joint_env",
-        DualFrankaJointEnv=placeholder,
-        DualFrankaJointRobotConfig=placeholder,
-    )
-    _stub_module(
-        monkeypatch,
-        "rlinf.envs.realworld.franka.tasks.dual_franka_tcp_env",
-        DualFrankaTCPEnv=placeholder,
-        DualFrankaTCPRobotConfig=placeholder,
-    )
-    gim_tasks = _stub_module(
-        monkeypatch,
-        "rlinf.envs.realworld.gim_arm.tasks",
-        package=True,
-    )
-    _stub_module(
-        monkeypatch,
-        "rlinf.envs.realworld.gim_arm",
-        package=True,
-        GimArmEnv=placeholder,
-        GimArmRobotConfig=placeholder,
-        GimArmRobotState=placeholder,
-        tasks=gim_tasks,
-    )
-    xsquare_tasks = _stub_module(
-        monkeypatch,
-        "rlinf.envs.realworld.xsquare.tasks",
-        package=True,
-    )
-    _stub_module(
-        monkeypatch,
-        "rlinf.envs.realworld.xsquare",
-        package=True,
-        Turtle2Env=placeholder,
-        Turtle2RobotConfig=placeholder,
-        Turtle2RobotState=placeholder,
-        tasks=xsquare_tasks,
-    )
-    _stub_module(
-        monkeypatch,
-        "rlinf.envs.realworld.realworld_env",
-        RealWorldEnv=_StubRealWorldEnv,
-    )
 
-    package_init = realworld_dir / "__init__.py"
-    spec = importlib.util.spec_from_file_location(
-        "rlinf.envs.realworld",
-        package_init,
-        submodule_search_locations=[str(realworld_dir)],
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError("could not load the real-world package")
-    module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, "rlinf.envs.realworld", module)
-    spec.loader.exec_module(module)
-    return module
+def _compose_config(monkeypatch: pytest.MonkeyPatch) -> Any:
+    monkeypatch.setenv("EMBODIED_PATH", str(ROOT / "examples" / "embodiment"))
+    with initialize_config_dir(config_dir=str(CONFIG_ROOT)):
+        return compose(config_name=CONFIG_NAME)
 
 
 @pytest.fixture
@@ -263,9 +144,7 @@ def _record_controller_motion(
 def test_hydra_composes_the_f1_train_and_eval_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("EMBODIED_PATH", str(ROOT / "examples" / "embodiment"))
-    with initialize_config_dir(config_dir=str(CONFIG_ROOT)):
-        cfg = compose(config_name=CONFIG_NAME)
+    cfg = _compose_config(monkeypatch)
 
     assert cfg.cluster.num_nodes == 1
     assert dict(cfg.cluster.component_placement) == {
@@ -283,6 +162,9 @@ def test_hydra_composes_the_f1_train_and_eval_contract(
     assert cfg.actor.global_batch_size == 8
     assert cfg.actor.model.state_dim == 16
     assert cfg.actor.model.action_dim == 16
+    assert cfg.actor.model.image_num == 3
+    assert cfg.runner.only_eval is False
+    assert cfg.rollout.model.precision == cfg.actor.model.precision
 
     for section in (cfg.env.train, cfg.env.eval):
         assert section.env_type == "realworld"
@@ -296,34 +178,91 @@ def test_hydra_composes_the_f1_train_and_eval_contract(
         assert section.override_cfg.is_dummy is True
 
 
-def test_importing_realworld_registers_only_v1_without_ros(
-    registered_f1: ModuleType,
-) -> None:
-    del registered_f1
-    forbidden_before = {
-        name
-        for name in sys.modules
-        if name == "rclpy"
-        or name.startswith("rclpy.")
-        or name == "cv_bridge"
-        or name.startswith("cv_bridge.")
-    }
+def test_importing_realworld_is_f1_only_and_has_no_process_side_effects() -> None:
+    script = textwrap.dedent(
+        f"""
+        import json
+        import sys
+        from types import ModuleType
 
-    assert gym.spec(ENV_ID).entry_point == (
+        process_calls = []
+        psutil = ModuleType("psutil")
+        psutil.process_iter = lambda: process_calls.append("scan")
+        sys.modules["psutil"] = psutil
+
+        import gymnasium as gym
+        import rlinf.envs.realworld as realworld
+
+        forbidden_prefixes = (
+            "cv2",
+            "cv_bridge",
+            "rclpy",
+            "rospy",
+            "turtle2_basic",
+            "rlinf.envs.realworld.dosw1",
+            "rlinf.envs.realworld.franka",
+            "rlinf.envs.realworld.gim_arm",
+            "rlinf.envs.realworld.xsquare",
+        )
+        forbidden = sorted(
+            name
+            for name in sys.modules
+            if any(
+                name == prefix or name.startswith(prefix + ".")
+                for prefix in forbidden_prefixes
+            )
+        )
+        print(json.dumps({{
+            "entry_point": gym.spec({ENV_ID!r}).entry_point,
+            "forbidden": forbidden,
+            "process_calls": process_calls,
+            "exports": list(realworld.__all__),
+        }}))
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload["entry_point"] == (
         "rlinf.envs.realworld.f1.tasks:DualArmPegInsertionEnv"
     )
+    assert payload["forbidden"] == []
+    assert payload["process_calls"] == []
+    assert payload["exports"] == [
+        "DualFrankaEnv",
+        "DualFrankaJointEnv",
+        "DualFrankaJointRobotConfig",
+        "DualFrankaTCPEnv",
+        "DualFrankaTCPRobotConfig",
+        "DualFrankaRobotConfig",
+        "DOSW1Config",
+        "DOSW1Env",
+        "dosw1_tasks",
+        "FrankaEnv",
+        "FrankaRobotConfig",
+        "FrankaRobotState",
+        "f1_tasks",
+        "franka_tasks",
+        "GimArmEnv",
+        "GimArmRobotConfig",
+        "GimArmRobotState",
+        "gim_arm_tasks",
+        "Turtle2Env",
+        "Turtle2RobotConfig",
+        "Turtle2RobotState",
+        "xsquare_tasks",
+        "RealWorldEnv",
+    ]
+
     with pytest.raises(gym.error.Error):
         gym.spec(LEGACY_ENV_ID)
-
-    forbidden_after = {
-        name
-        for name in sys.modules
-        if name == "rclpy"
-        or name.startswith("rclpy.")
-        or name == "cv_bridge"
-        or name.startswith("cv_bridge.")
-    }
-    assert forbidden_after == forbidden_before
 
 
 def test_each_gym_make_uses_its_own_dynamic_operator_config(
@@ -346,6 +285,33 @@ def test_each_gym_make_uses_its_own_dynamic_operator_config(
     finally:
         automatic.close()
         manual.close()
+
+
+@pytest.mark.parametrize(
+    "make_kwargs",
+    [
+        {},
+        {"env_cfg": {}},
+        {"env_cfg": {"operator_control": None}},
+    ],
+    ids=["no-env-cfg", "missing-operator-control", "null-operator-control"],
+)
+def test_direct_gym_make_without_operator_control_fails_closed(
+    registered_f1: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    make_kwargs: dict[str, object],
+) -> None:
+    del registered_f1
+    motion_calls, close_calls = _record_controller_motion(
+        monkeypatch,
+        expected_is_dummy=True,
+    )
+
+    with pytest.raises(ValueError, match="operator_control"):
+        gym.make(ENV_ID, override_cfg={"is_dummy": True}, **make_kwargs)
+
+    assert motion_calls == []
+    assert close_calls == ["close"]
 
 
 def test_automatic_fake_wrapper_runs_reset_and_four_step_horizon_without_ros(
@@ -384,6 +350,67 @@ def test_automatic_fake_wrapper_runs_reset_and_four_step_horizon_without_ros(
         or name.startswith("cv_bridge.")
     }
     assert forbidden_after == forbidden_before
+
+
+def test_composed_config_runs_realworld_env_through_the_four_step_horizon(
+    registered_f1: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del registered_f1
+    cfg = _compose_config(monkeypatch)
+    from rlinf.envs import get_env_cls
+
+    env_cls = get_env_cls("realworld", cfg.env.train)
+
+    def fail_if_legacy_setup_runs() -> None:
+        raise AssertionError("F1 construction must not run legacy node setup")
+
+    monkeypatch.setattr(
+        env_cls,
+        "realworld_setup",
+        staticmethod(fail_if_legacy_setup_runs),
+    )
+    env = env_cls(
+        cfg.env.train,
+        num_envs=1,
+        seed_offset=0,
+        total_num_processes=1,
+        worker_info=None,
+    )
+    try:
+        observation, _ = env.reset(seed=11)
+        assert tuple(observation["states"].shape) == (1, 16)
+        assert tuple(observation["main_images"].shape) == (1, 128, 128, 3)
+        assert tuple(observation["extra_view_images"].shape) == (
+            1,
+            2,
+            128,
+            128,
+            3,
+        )
+
+        truncations = []
+        for _ in range(4):
+            _, _, terminated, truncated, _ = env.step(
+                np.zeros((1, 16), dtype=np.float32)
+            )
+            assert terminated.tolist() == [False]
+            truncations.append(truncated.tolist())
+        assert truncations == [[False], [False], [False], [True]]
+        assert env.elapsed_steps.tolist() == [0]
+        assert not any(
+            name.startswith(
+                (
+                    "rlinf.envs.realworld.dosw1",
+                    "rlinf.envs.realworld.franka",
+                    "rlinf.envs.realworld.gim_arm",
+                    "rlinf.envs.realworld.xsquare",
+                )
+            )
+            for name in sys.modules
+        )
+    finally:
+        env.close()
 
 
 def test_manual_mode_never_approves_robot_reset_automatically(

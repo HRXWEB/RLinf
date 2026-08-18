@@ -41,20 +41,20 @@ _WRAPPER_SPEC = WrapperSpec(
 _OPERATOR_CONTROL_FIELDS = frozenset({"mode", "timeout_s"})
 
 
-def _operator_control_config(env: gym.Env) -> Mapping[str, Any] | None:
-    """Return this Gym instance's operator config, if explicitly supplied."""
+def _operator_control_config(env: gym.Env) -> Mapping[str, Any]:
+    """Return this Gym instance's required operator-control config."""
 
     spec = env.unwrapped.spec
     if spec is None:
         raise ValueError("F1 Gym instance has no EnvSpec")
     env_cfg = spec.kwargs.get("env_cfg")
     if env_cfg is None:
-        return None
+        raise ValueError("env_cfg with operator_control is required")
     if not isinstance(env_cfg, Mapping):
         raise ValueError("env_cfg must be a mapping")
     operator_control = env_cfg.get("operator_control")
     if operator_control is None:
-        return None
+        raise ValueError("operator_control is required")
     if not isinstance(operator_control, Mapping):
         raise ValueError("operator_control must be a mapping")
     actual_fields = set(operator_control)
@@ -68,8 +68,6 @@ def _make_supervised_episode_control(env: gym.Env) -> gym.Env:
 
     try:
         operator_control = _operator_control_config(env)
-        if operator_control is None:
-            return env
         mode = operator_control["mode"]
         if mode == "automatic":
             backend_is_fake = env.unwrapped.config.is_dummy

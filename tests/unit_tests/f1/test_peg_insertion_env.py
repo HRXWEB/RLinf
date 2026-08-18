@@ -80,7 +80,10 @@ def _make_task_env(**overrides: object) -> gym.Env:
         worker_info=None,
         hardware_info=None,
         env_idx=0,
-        env_cfg={"source": "realworld-wrapper"},
+        env_cfg={
+            "source": "realworld-wrapper",
+            "operator_control": {"mode": "automatic", "timeout_s": 0.0},
+        },
     )
 
 

@@ -108,6 +108,7 @@ actor:
     model_path: /path/to/RLinf-ResNet10-pretrained
     state_dim: 16
     action_dim: 16
+    image_num: 3
 
   optim:
     clip_grad: 10.0

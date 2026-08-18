@@ -1230,8 +1230,7 @@ def test_automatic_gate_drives_the_installed_fake_task_to_its_real_horizon(
     monkeypatch.setitem(sys.modules, TASKS_PACKAGE, tasks_module)
     spec.loader.exec_module(tasks_module)
 
-    env = gym.make(
-        TASK_ENV_ID,
+    env = tasks_module.DualArmPegInsertionEnv(
         override_cfg={"control_period_s": 0.001},
         worker_info=None,
         hardware_info=None,

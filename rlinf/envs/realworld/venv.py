@@ -46,27 +46,40 @@ class NoAutoResetSyncVectorEnv(SyncVectorEnv):
             The batched environment step results
         """
         self._actions = actions
+        observations_buffer = (
+            self._observations if hasattr(self, "_observations") else self.observations
+        )
+        terminations = (
+            self._terminations if hasattr(self, "_terminations") else self._terminateds
+        )
+        truncations = (
+            self._truncations if hasattr(self, "_truncations") else self._truncateds
+        )
         observations, infos = [], {}
         for i, (env, action) in enumerate(zip(self.envs, self._actions)):
             (
                 observation,
                 self._rewards[i],
-                self._terminateds[i],
-                self._truncateds[i],
+                terminations[i],
+                truncations[i],
                 info,
             ) = env.step(action)
 
             observations.append(observation)
             infos = self._add_info(infos, info, i)
-        self.observations = concatenate(
-            self.single_observation_space, observations, self.observations
+        observations_buffer = concatenate(
+            self.single_observation_space, observations, observations_buffer
         )
+        if hasattr(self, "_observations"):
+            self._observations = observations_buffer
+        else:
+            self.observations = observations_buffer
 
         return (
-            deepcopy(self.observations) if self.copy else self.observations,
+            deepcopy(observations_buffer) if self.copy else observations_buffer,
             np.copy(self._rewards),
-            np.copy(self._terminateds),
-            np.copy(self._truncateds),
+            np.copy(terminations),
+            np.copy(truncations),
             infos,
         )
 

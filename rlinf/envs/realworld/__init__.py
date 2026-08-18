@@ -12,27 +12,74 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .dosw1 import DOSW1Config, DOSW1Env
-from .dosw1 import tasks as dosw1_tasks
-from .f1 import tasks as f1_tasks
-from .franka import FrankaEnv, FrankaRobotConfig, FrankaRobotState
-from .franka import tasks as franka_tasks
-from .franka.dual_franka_env import DualFrankaEnv, DualFrankaRobotConfig
-from .franka.tasks.dual_franka_joint_env import (
-    DualFrankaJointEnv,
-    DualFrankaJointRobotConfig,
-)
-from .franka.tasks.dual_franka_tcp_env import (
-    DualFrankaTCPEnv,
-    DualFrankaTCPRobotConfig,
-)
-from .gim_arm import GimArmEnv, GimArmRobotConfig, GimArmRobotState
-from .gim_arm import tasks as gim_arm_tasks
-from .realworld_env import RealWorldEnv
-from .xsquare import Turtle2Env, Turtle2RobotConfig, Turtle2RobotState
-from .xsquare import tasks as xsquare_tasks
+"""Real-world environments with dependency-isolated lazy imports."""
 
-RealWorldEnv.realworld_setup()
+from importlib import import_module
+from typing import Any
+
+from .f1 import tasks as f1_tasks
+
+_LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
+    "DualFrankaEnv": (".franka.dual_franka_env", "DualFrankaEnv"),
+    "DualFrankaJointEnv": (
+        ".franka.tasks.dual_franka_joint_env",
+        "DualFrankaJointEnv",
+    ),
+    "DualFrankaJointRobotConfig": (
+        ".franka.tasks.dual_franka_joint_env",
+        "DualFrankaJointRobotConfig",
+    ),
+    "DualFrankaTCPEnv": (
+        ".franka.tasks.dual_franka_tcp_env",
+        "DualFrankaTCPEnv",
+    ),
+    "DualFrankaTCPRobotConfig": (
+        ".franka.tasks.dual_franka_tcp_env",
+        "DualFrankaTCPRobotConfig",
+    ),
+    "DualFrankaRobotConfig": (
+        ".franka.dual_franka_env",
+        "DualFrankaRobotConfig",
+    ),
+    "DOSW1Config": (".dosw1", "DOSW1Config"),
+    "DOSW1Env": (".dosw1", "DOSW1Env"),
+    "dosw1_tasks": (".dosw1.tasks", None),
+    "FrankaEnv": (".franka", "FrankaEnv"),
+    "FrankaRobotConfig": (".franka", "FrankaRobotConfig"),
+    "FrankaRobotState": (".franka", "FrankaRobotState"),
+    "franka_tasks": (".franka.tasks", None),
+    "GimArmEnv": (".gim_arm", "GimArmEnv"),
+    "GimArmRobotConfig": (".gim_arm", "GimArmRobotConfig"),
+    "GimArmRobotState": (".gim_arm", "GimArmRobotState"),
+    "gim_arm_tasks": (".gim_arm.tasks", None),
+    "Turtle2Env": (".xsquare", "Turtle2Env"),
+    "Turtle2RobotConfig": (".xsquare", "Turtle2RobotConfig"),
+    "Turtle2RobotState": (".xsquare", "Turtle2RobotState"),
+    "xsquare_tasks": (".xsquare.tasks", None),
+    "RealWorldEnv": (".realworld_env", "RealWorldEnv"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Load legacy robot stacks only when their public export is requested."""
+
+    try:
+        module_name, attribute = _LAZY_EXPORTS[name]
+    except KeyError as error:
+        raise AttributeError(
+            f"module {__name__!r} has no attribute {name!r}"
+        ) from error
+    module = import_module(module_name, __name__)
+    value = module if attribute is None else getattr(module, attribute)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    """Return eagerly and lazily available package attributes."""
+
+    return sorted(set(globals()) | set(__all__))
+
 
 __all__ = [
     "DualFrankaEnv",
