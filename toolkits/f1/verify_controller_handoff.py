@@ -19,8 +19,8 @@ import hashlib
 import json
 import re
 from email.parser import BytesParser
+from io import BytesIO
 from pathlib import Path, PurePosixPath
-from urllib.parse import urlsplit
 from zipfile import BadZipFile, ZipFile
 
 EXPECTED_API_CONTRACT = "docs/api-contract-0.1.0.md"
@@ -49,16 +49,6 @@ def _load_handoff(handoff_path: Path) -> dict[str, object]:
     return payload
 
 
-def _wheel_sha256(wheel_path: Path) -> str:
-    """Return the SHA-256 digest of ``wheel_path``."""
-
-    digest = hashlib.sha256()
-    with wheel_path.open("rb") as wheel_file:
-        for chunk in iter(lambda: wheel_file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _validate_schema(payload: dict[str, object]) -> dict[str, str]:
     """Validate the handoff fields and return their string values."""
 
@@ -82,27 +72,12 @@ def _validate_schema(payload: dict[str, object]) -> dict[str, str]:
     return string_payload
 
 
-def _is_repository_url(value: str) -> bool:
-    """Return whether ``value`` resembles a URL or SSH repository location."""
-
-    if "://" in value:
-        parsed = urlsplit(value)
-        return (
-            parsed.scheme in {"http", "https", "ssh"}
-            and parsed.hostname is not None
-            and parsed.path not in {"", "/"}
-        )
-    return re.fullmatch(r"(?:[^@\s/:]+@)?[^@\s/:]+:[^\s]+", value) is not None
-
-
 def _validate_provenance(payload: dict[str, str]) -> None:
     """Validate immutable controller release provenance."""
 
     repository_url = payload["repository_url"]
-    if not _is_repository_url(repository_url):
-        raise ValueError(
-            "controller handoff repository_url is not a valid repository URL"
-        )
+    if not repository_url:
+        raise ValueError("controller handoff repository_url must not be empty")
 
     release_commit = payload["release_commit"]
     if re.fullmatch(r"[0-9a-f]{40}", release_commit) is None:
@@ -148,27 +123,27 @@ def _validate_provenance(payload: dict[str, str]) -> None:
         )
 
 
-def _flattened_wheel(handoff_path: Path) -> Path:
+def _flattened_wheel(confinement_root: Path, resolved_root: Path) -> Path:
     """Return the verified non-symlink wheel copied beside the handoff."""
 
     wheel_name = PurePosixPath(EXPECTED_WHEEL_PATH).name
-    wheel_path = handoff_path.parent / wheel_name
+    wheel_path = confinement_root / wheel_name
     if wheel_path.is_symlink() or not wheel_path.is_file():
         raise ValueError(
             "flattened controller wheel must be a regular non-symlink file "
             "beside the handoff"
         )
     resolved_wheel = wheel_path.resolve(strict=True)
-    if resolved_wheel.parent != handoff_path.parent:
+    if resolved_wheel.parent != resolved_root:
         raise ValueError("flattened controller wheel must remain beside the handoff")
     return resolved_wheel
 
 
-def _validate_wheel_identity(wheel_path: Path) -> None:
+def _validate_wheel_identity(wheel_snapshot: bytes) -> None:
     """Validate the distribution name and version in wheel METADATA."""
 
     try:
-        with ZipFile(wheel_path) as archive:
+        with ZipFile(BytesIO(wheel_snapshot)) as archive:
             metadata_paths = [
                 name
                 for name in archive.namelist()
@@ -206,19 +181,28 @@ def verify_handoff(handoff_path: Path) -> Path:
         ValueError: If required contract, version, or digest data is invalid.
     """
 
-    handoff_path = handoff_path.resolve()
-    payload = _validate_schema(_load_handoff(handoff_path))
+    original_handoff_path = handoff_path.absolute()
+    if original_handoff_path.is_symlink() or not original_handoff_path.is_file():
+        raise ValueError("controller handoff must be a regular non-symlink file")
+    confinement_root = original_handoff_path.parent
+    resolved_root = confinement_root.resolve(strict=True)
+    resolved_handoff_path = original_handoff_path.resolve(strict=True)
+    if resolved_handoff_path.parent != resolved_root:
+        raise ValueError("controller handoff must remain within its original parent")
+
+    payload = _validate_schema(_load_handoff(resolved_handoff_path))
     _validate_provenance(payload)
-    wheel_path = _flattened_wheel(handoff_path)
-    _validate_wheel_identity(wheel_path)
+    wheel_path = _flattened_wheel(confinement_root, resolved_root)
+    wheel_snapshot = wheel_path.read_bytes()
 
     expected_sha256 = payload["wheel_sha256"]
-    actual_sha256 = _wheel_sha256(wheel_path)
+    actual_sha256 = hashlib.sha256(wheel_snapshot).hexdigest()
     if actual_sha256 != expected_sha256:
         raise ValueError(
             "controller wheel SHA-256 mismatch: "
             f"expected {expected_sha256!r}, got {actual_sha256}"
         )
+    _validate_wheel_identity(wheel_snapshot)
     return wheel_path
 
 
