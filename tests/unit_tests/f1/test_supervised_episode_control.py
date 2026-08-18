@@ -459,21 +459,41 @@ def test_ack_queued_before_fault_boundary_cannot_recover_the_fault(
     assert env.reset_calls == 2
 
 
-def test_ack_racing_between_fault_publication_and_cursor_is_conservatively_stale(
+def test_ack_submitted_after_fault_is_visible_can_recover_the_fault(
     wrappers_module: ModuleType,
 ) -> None:
-    cursor_entered = Event()
-    release_cursor = Event()
+    fault_published = Event()
+    release_locked_boundary = Event()
+    ack_attempt = Barrier(2)
+    ack_accepted = Event()
 
-    class PausingCursorGate(wrappers_module.OperatorGate):
+    class CoordinatedFaultGate(wrappers_module.OperatorGate):
+        def submit(self, event: Any) -> int:
+            if event is wrappers_module.OperatorEvent.ACK_FAULT:
+                ack_attempt.wait(timeout=1.0)
+            sequence = super().submit(event)
+            if event is wrappers_module.OperatorEvent.ACK_FAULT:
+                ack_accepted.set()
+            return sequence
+
         def cursor(self) -> int:
-            cursor_entered.set()
-            if not release_cursor.wait(timeout=1.0):
-                raise TimeoutError("test did not release gate cursor")
+            fault_published.set()
+            if not ack_accepted.wait(timeout=1.0):
+                raise TimeoutError("post-fault ACK was not accepted")
             return super().cursor()
 
+        def _linearize_fault_boundary(self, publish: Any) -> bool:
+            def publish_and_pause(boundary: int) -> bool:
+                result = publish(boundary)
+                fault_published.set()
+                if not release_locked_boundary.wait(timeout=1.0):
+                    raise TimeoutError("test did not release fault boundary")
+                return result
+
+            return super()._linearize_fault_boundary(publish_and_pause)
+
     env = RecordingEnv()
-    gate = PausingCursorGate()
+    gate = CoordinatedFaultGate()
     wrapper = wrappers_module.SupervisedEpisodeControlWrapper(
         env,
         gate,
@@ -491,22 +511,34 @@ def test_ack_racing_between_fault_publication_and_cursor_is_conservatively_stale
         except BaseException as error:
             results.append(error)
 
+    def acknowledge_visible_fault() -> None:
+        gate.submit(wrappers_module.OperatorEvent.ACK_FAULT)
+
     fault_thread = Thread(target=trigger_fault)
     fault_thread.start()
-    observed_cursor = cursor_entered.wait(timeout=1.0)
-    if observed_cursor:
-        assert wrapper.state is wrappers_module.EpisodeState.FAULT
-        gate.submit(wrappers_module.OperatorEvent.ACK_FAULT)
-    release_cursor.set()
-    fault_thread.join(timeout=1.0)
+    observed_fault = fault_published.wait(timeout=1.0)
+    assert observed_fault
+    assert wrapper.state is wrappers_module.EpisodeState.FAULT
 
-    assert observed_cursor
+    ack_thread = Thread(target=acknowledge_visible_fault)
+    ack_thread.start()
+    ack_attempt.wait(timeout=1.0)
+    release_locked_boundary.set()
+    fault_thread.join(timeout=1.0)
+    ack_thread.join(timeout=1.0)
+
     assert not fault_thread.is_alive()
+    assert not ack_thread.is_alive()
+    assert ack_accepted.is_set()
     assert len(results) == 1
     assert isinstance(results[0], wrappers_module.EpisodeFaultError)
-    with pytest.raises(TimeoutError, match="ack_fault"):
-        wrapper.reset()
-    assert wrapper.state is wrappers_module.EpisodeState.FAULT
+
+    gate.submit(wrappers_module.OperatorEvent.RESET_APPROVED)
+    gate.submit(wrappers_module.OperatorEvent.START)
+    wrapper.reset()
+
+    assert wrapper.state is wrappers_module.EpisodeState.RUNNING
+    assert env.reset_calls == 2
 
 
 def test_automatic_gate_cannot_recover_a_fault_without_an_explicit_ack(

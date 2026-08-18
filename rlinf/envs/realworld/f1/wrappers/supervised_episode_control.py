@@ -15,6 +15,7 @@
 """Operator-supervised episode boundaries for the F1 robot environment."""
 
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from math import isfinite
@@ -146,6 +147,15 @@ class OperatorGate:
 
         with self._condition:
             return self._last_sequence
+
+    def _linearize_fault_boundary(
+        self,
+        publish: Callable[[int], bool],
+    ) -> bool:
+        """Publish a fault against one serialized accepted-event boundary."""
+
+        with self._condition:
+            return publish(self._last_sequence)
 
     def poll(self, state: EpisodeState) -> OperatorEvent | None:
         """Return the next event immediately, or ``None`` if none is ready."""
@@ -317,18 +327,17 @@ class SupervisedEpisodeControlWrapper(gym.Wrapper[ObsType, ActType, ObsType, Act
             return self._fault_reason
 
     def _enter_fault(self, reason: str) -> bool:
-        with self._state_lock:
-            if self._state is EpisodeState.CLOSED:
-                return False
-            self._fault_reason = reason
-            self._state = EpisodeState.FAULT
-        self._pending_reset_result = None
-        boundary = self._operator_gate.cursor()
-        with self._state_lock:
-            if self._state is not EpisodeState.FAULT:
-                return False
-            self._fault_event_boundary = boundary
-            return True
+        def publish(boundary: int) -> bool:
+            with self._state_lock:
+                if self._state is EpisodeState.CLOSED:
+                    return False
+                self._fault_reason = reason
+                self._pending_reset_result = None
+                self._fault_event_boundary = boundary
+                self._state = EpisodeState.FAULT
+                return True
+
+        return self._operator_gate._linearize_fault_boundary(publish)
 
     def _wait_for(self, expected: OperatorEvent) -> None:
         state = self.state
