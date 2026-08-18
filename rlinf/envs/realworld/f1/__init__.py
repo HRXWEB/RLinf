@@ -14,6 +14,6 @@
 
 """F1 real-world robot environment."""
 
-from .f1_robot_env import F1RobotConfig, F1RobotEnv
+from .f1_robot_env import F1_STATE_ORDER, F1RobotConfig, F1RobotEnv
 
-__all__ = ["F1RobotConfig", "F1RobotEnv"]
+__all__ = ["F1_STATE_ORDER", "F1RobotConfig", "F1RobotEnv"]

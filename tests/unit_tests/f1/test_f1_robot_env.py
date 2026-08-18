@@ -17,7 +17,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 from time import monotonic
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import gymnasium as gym
@@ -27,6 +27,7 @@ from f1_robot_controller import (
     BackendUnavailableError,
     CommandReceipt,
     CommandStatus,
+    ControllerError,
     ControllerHealth,
     ControllerNotReadyError,
     DualArmCommand,
@@ -58,6 +59,13 @@ F1_PACKAGE = _load_f1_package()
 F1RobotConfig = F1_PACKAGE.F1RobotConfig
 F1RobotEnv = F1_PACKAGE.F1RobotEnv
 F1_ENV_MODULE = sys.modules["_f1_env_under_test.f1_robot_env"]
+
+EXPECTED_F1_STATE_ORDER = (
+    "left_joint_position",
+    "left_gripper",
+    "right_joint_position",
+    "right_gripper",
+)
 
 SENSOR_NAMES = (
     "left_joint_position",
@@ -104,15 +112,29 @@ class RecordingController(F1RobotController):
         observation: RobotObservation | None = None,
         *,
         converge_reset: bool = True,
+        policy_status: CommandStatus = CommandStatus.FINISHED_DISPATCH,
+        reset_status: CommandStatus = CommandStatus.FINISHED_DISPATCH,
+        health: ControllerHealth | None = None,
         ready_error: Exception | None = None,
     ) -> None:
         self.observation = observation or _robot_observation()
         self.converge_reset = converge_reset
+        self.policy_status = policy_status
+        self.reset_status = reset_status
+        self.controller_health = health or ControllerHealth(
+            ready=True,
+            faulted=False,
+            reason=None,
+            checked_at_monotonic_s=1.0,
+        )
         self.ready_error = ready_error
+        self.read_error: Exception | None = None
         self.policy_commands: list[DualArmCommand] = []
         self.reset_commands: list[DualArmResetCommand] = []
         self.statuses: dict[int, CommandStatus] = {}
         self.read_requests: list[dict[str, float | None]] = []
+        self.events: list[tuple[str, object]] = []
+        self.stop_reasons: list[str] = []
         self.close_calls = 0
         self.open_calls = 0
         self.wait_ready_calls: list[float] = []
@@ -122,9 +144,11 @@ class RecordingController(F1RobotController):
 
     def open(self) -> None:
         self.open_calls += 1
+        self.events.append(("open", None))
 
     def wait_ready(self, timeout_s: float) -> None:
         self.wait_ready_calls.append(timeout_s)
+        self.events.append(("wait_ready", timeout_s))
         if self.ready_error is not None:
             raise self.ready_error
 
@@ -135,6 +159,7 @@ class RecordingController(F1RobotController):
         max_skew_s: float,
         newer_than: float | None = None,
     ) -> RobotObservation:
+        self.events.append(("read_observation", newer_than))
         self.read_requests.append(
             {
                 "max_age_s": max_age_s,
@@ -144,9 +169,12 @@ class RecordingController(F1RobotController):
         )
         if newer_than is not None:
             self.post_submit_read_at_s = monotonic()
+        if self.read_error is not None:
+            raise self.read_error
         return self.observation
 
     def submit_command(self, command: DualArmCommand) -> CommandReceipt:
+        self.events.append(("submit_command", command.command_id))
         self.policy_commands.append(command)
         self.submitted_at_s = monotonic()
         self.observation = _robot_observation(
@@ -161,10 +189,11 @@ class RecordingController(F1RobotController):
             expires_at_monotonic_s=101.0 + command.command_id,
         )
         self.last_receipt = receipt
-        self.statuses[command.command_id] = CommandStatus.FINISHED_DISPATCH
+        self.statuses[command.command_id] = self.policy_status
         return receipt
 
     def submit_reset_command(self, command: DualArmResetCommand) -> CommandReceipt:
+        self.events.append(("submit_reset_command", command.command_id))
         self.reset_commands.append(command)
         if self.converge_reset:
             self.observation = _robot_observation(
@@ -179,22 +208,20 @@ class RecordingController(F1RobotController):
             expires_at_monotonic_s=101.0 + command.command_id,
         )
         self.last_receipt = receipt
-        self.statuses[command.command_id] = CommandStatus.FINISHED_DISPATCH
+        self.statuses[command.command_id] = self.reset_status
         return receipt
 
     def get_command_status(self, command_id: int) -> CommandStatus:
+        self.events.append(("get_command_status", command_id))
         return self.statuses[command_id]
 
     def health(self) -> ControllerHealth:
-        return ControllerHealth(
-            ready=True,
-            faulted=False,
-            reason=None,
-            checked_at_monotonic_s=1.0,
-        )
+        self.events.append(("health", None))
+        return self.controller_health
 
     def stop_experiment_motion(self, reason: str) -> None:
-        del reason
+        self.events.append(("stop_experiment_motion", reason))
+        self.stop_reasons.append(reason)
 
     def close(self) -> None:
         self.close_calls += 1
@@ -212,6 +239,75 @@ def _install_recording_controller(
 
     monkeypatch.setattr(F1_ENV_MODULE, "create_controller", factory)
     return factory_call
+
+
+def _load_realworld_env_class(
+    monkeypatch: pytest.MonkeyPatch,
+) -> type:
+    """Load RealWorldEnv without importing RLinf's unrelated heavy stack."""
+
+    torch_stub = ModuleType("torch")
+    torch_stub.Tensor = type("Tensor", (), {})
+    monkeypatch.setitem(sys.modules, "torch", torch_stub)
+
+    psutil_stub = ModuleType("psutil")
+    psutil_stub.process_iter = lambda: []
+    monkeypatch.setitem(sys.modules, "psutil", psutil_stub)
+
+    filelock_stub = ModuleType("filelock")
+    filelock_stub.FileLock = type("FileLock", (), {})
+    monkeypatch.setitem(sys.modules, "filelock", filelock_stub)
+
+    class OmegaConfStub:
+        @staticmethod
+        def create(value: object) -> object:
+            return value
+
+        @staticmethod
+        def to_container(value: object, *, resolve: bool) -> object:
+            del resolve
+            return value
+
+    omegaconf_stub = ModuleType("omegaconf")
+    omegaconf_stub.OmegaConf = OmegaConfStub
+    monkeypatch.setitem(sys.modules, "omegaconf", omegaconf_stub)
+
+    venv_stub = ModuleType("rlinf.envs.realworld.venv")
+    venv_stub.NoAutoResetSyncVectorEnv = type("NoAutoResetSyncVectorEnv", (), {})
+    monkeypatch.setitem(sys.modules, "rlinf.envs.realworld.venv", venv_stub)
+
+    utils_stub = ModuleType("rlinf.envs.utils")
+    utils_stub.to_tensor = lambda value: value
+    monkeypatch.setitem(sys.modules, "rlinf.envs.utils", utils_stub)
+
+    scheduler_stub = ModuleType("rlinf.scheduler")
+    scheduler_stub.WorkerInfo = object
+    monkeypatch.setitem(sys.modules, "rlinf.scheduler", scheduler_stub)
+
+    module_path = ROOT / "rlinf" / "envs" / "realworld" / "realworld_env.py"
+    spec = importlib.util.spec_from_file_location(
+        "_realworld_env_under_test", module_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load RealWorldEnv")
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    return module.RealWorldEnv
+
+
+def _raw_realworld_observation() -> dict[str, object]:
+    return {
+        "state": {
+            "right_gripper": np.array([[16.0]], dtype=np.float32),
+            "left_gripper": np.array([[8.0]], dtype=np.float32),
+            "right_joint_position": np.arange(9, 16, dtype=np.float32)[None, :],
+            "left_joint_position": np.arange(1, 8, dtype=np.float32)[None, :],
+        },
+        "frames": {
+            "head_color": np.zeros((1, 128, 128, 3), dtype=np.uint8),
+        },
+    }
 
 
 def test_f1_robot_config_has_the_frozen_phase_one_defaults() -> None:
@@ -233,6 +329,199 @@ def test_f1_robot_config_has_the_frozen_phase_one_defaults() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"is_dummy": 1},
+        {"control_period_s": 0.0},
+        {"max_observation_age_s": np.inf},
+        {"max_observation_skew_s": -0.01},
+        {"max_num_steps": True},
+        {"max_num_steps": 0},
+        {"max_num_steps": 1.5},
+        {"max_joint_delta_rad": (0.01,) * 13},
+        {"max_joint_delta_rad": (0.01,) * 13 + (-0.01,)},
+        {"max_joint_delta_rad": (0.01,) * 13 + (np.nan,)},
+        {"max_gripper_delta": -0.01},
+        {"reset_joint_target_rad": (0.0,) * 13},
+        {"reset_joint_target_rad": (0.0,) * 13 + (np.inf,)},
+        {"reset_gripper_target": (0.5,)},
+        {"reset_gripper_target": (-0.01, 0.5)},
+        {"reset_gripper_target": (0.5, np.nan)},
+        {"reset_duration_s": 0.0},
+        {"reset_timeout_s": np.inf},
+        {"reset_tolerance_rad": 0.0},
+    ],
+)
+def test_f1_robot_config_rejects_invalid_safety_values(
+    overrides: dict[str, object],
+) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        F1RobotConfig(**overrides)
+
+
+def test_f1_robot_config_copies_mutable_sequences_to_tuples() -> None:
+    joint_delta = [0.01] * 14
+    reset_target = [0.1] * 14
+    gripper_target = [0.2, 0.8]
+
+    config = F1RobotConfig(
+        max_joint_delta_rad=joint_delta,
+        reset_joint_target_rad=reset_target,
+        reset_gripper_target=gripper_target,
+    )
+    joint_delta[0] = 99.0
+    reset_target[0] = 99.0
+    gripper_target[0] = 99.0
+
+    assert config.max_joint_delta_rad == (0.01,) * 14
+    assert config.reset_joint_target_rad == (0.1,) * 14
+    assert config.reset_gripper_target == (0.2, 0.8)
+    assert isinstance(config.max_joint_delta_rad, tuple)
+    assert isinstance(config.reset_joint_target_rad, tuple)
+    assert isinstance(config.reset_gripper_target, tuple)
+
+
+def test_f1_exports_and_uses_the_canonical_state_order() -> None:
+    assert F1_PACKAGE.F1_STATE_ORDER == EXPECTED_F1_STATE_ORDER
+
+    env = F1RobotEnv(F1RobotConfig())
+    try:
+        assert tuple(env.observation_space["state"].spaces) == EXPECTED_F1_STATE_ORDER
+    finally:
+        env.close()
+
+
+def test_realworld_wrap_obs_flattens_the_configured_canonical_state_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    realworld_env_class = _load_realworld_env_class(monkeypatch)
+    env = realworld_env_class.__new__(realworld_env_class)
+    env.main_image_key = "head_color"
+    env.task_descriptions = ["task"]
+    env.state_order = EXPECTED_F1_STATE_ORDER
+
+    observation = env._wrap_obs(_raw_realworld_observation())
+
+    np.testing.assert_array_equal(
+        observation["states"],
+        np.arange(1, 17, dtype=np.float32)[None, :],
+    )
+
+
+def test_realworld_wrap_obs_rejects_state_order_that_is_not_an_exact_key_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    realworld_env_class = _load_realworld_env_class(monkeypatch)
+    env = realworld_env_class.__new__(realworld_env_class)
+    env.main_image_key = "head_color"
+    env.task_descriptions = ["task"]
+    env.state_order = EXPECTED_F1_STATE_ORDER[:-1] + ("unexpected",)
+
+    with pytest.raises(ValueError, match="state_order"):
+        env._wrap_obs(_raw_realworld_observation())
+
+
+def test_realworld_wrap_obs_without_state_order_keeps_sorted_legacy_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    realworld_env_class = _load_realworld_env_class(monkeypatch)
+    env = realworld_env_class.__new__(realworld_env_class)
+    env.main_image_key = "head_color"
+    env.task_descriptions = ["task"]
+    env.state_order = None
+
+    observation = env._wrap_obs(_raw_realworld_observation())
+
+    np.testing.assert_array_equal(
+        observation["states"],
+        np.array([[8.0, *range(1, 8), 16.0, *range(9, 16)]], dtype=np.float32),
+    )
+
+
+def test_realworld_env_reads_optional_state_order_from_top_level_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    realworld_env_class = _load_realworld_env_class(monkeypatch)
+
+    def fake_init_env(env: object) -> None:
+        state_spaces = {
+            key: gym.spaces.Box(-1.0, 1.0, shape=(1,), dtype=np.float32)
+            for key in EXPECTED_F1_STATE_ORDER
+        }
+        env.env = SimpleNamespace(
+            single_observation_space=gym.spaces.Dict(
+                {"state": gym.spaces.Dict(state_spaces)}
+            )
+        )
+        env.task_descriptions = ["task"]
+
+    monkeypatch.setattr(realworld_env_class, "_init_env", fake_init_env)
+    monkeypatch.setattr(realworld_env_class, "_init_metrics", lambda self: None)
+    monkeypatch.setattr(
+        realworld_env_class,
+        "_init_reset_state_ids",
+        lambda self: None,
+    )
+    cfg = SimpleNamespace(
+        override_cfg={},
+        video_cfg={},
+        seed=1,
+        use_fixed_reset_state_ids=False,
+        auto_reset=False,
+        ignore_terminations=False,
+        group_size=1,
+        main_image_key="head_color",
+        state_order=list(EXPECTED_F1_STATE_ORDER),
+    )
+    cfg.get = lambda name, default=None: getattr(cfg, name, default)
+
+    env = realworld_env_class(cfg, 1, 0, 1, None)
+
+    assert env.state_order == EXPECTED_F1_STATE_ORDER
+
+
+def test_realworld_env_rejects_configured_state_order_during_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    realworld_env_class = _load_realworld_env_class(monkeypatch)
+
+    def fake_init_env(env: object) -> None:
+        state_spaces = {
+            key: gym.spaces.Box(-1.0, 1.0, shape=(1,), dtype=np.float32)
+            for key in EXPECTED_F1_STATE_ORDER
+        }
+        env.env = SimpleNamespace(
+            single_observation_space=gym.spaces.Dict(
+                {"state": gym.spaces.Dict(state_spaces)}
+            )
+        )
+        env.task_descriptions = ["task"]
+
+    monkeypatch.setattr(realworld_env_class, "_init_env", fake_init_env)
+    monkeypatch.setattr(realworld_env_class, "_init_metrics", lambda self: None)
+    monkeypatch.setattr(
+        realworld_env_class,
+        "_init_reset_state_ids",
+        lambda self: None,
+    )
+    cfg = SimpleNamespace(
+        override_cfg={},
+        video_cfg={},
+        seed=1,
+        use_fixed_reset_state_ids=False,
+        auto_reset=False,
+        ignore_terminations=False,
+        group_size=1,
+        main_image_key="head_color",
+        state_order=["left_joint_position"],
+    )
+    cfg.get = lambda name, default=None: getattr(cfg, name, default)
+
+    with pytest.raises(ValueError, match="state_order"):
+        realworld_env_class(cfg, 1, 0, 1, None)
+
+
 def test_f1_robot_env_exposes_16d_action_state_and_three_rgb_frames() -> None:
     env = F1RobotEnv(F1RobotConfig())
     try:
@@ -243,12 +532,7 @@ def test_f1_robot_env_exposes_16d_action_state_and_three_rgb_frames() -> None:
         np.testing.assert_array_equal(env.action_space.high, np.full(16, 1.0))
 
         state_space = env.observation_space["state"]
-        assert list(state_space.spaces) == [
-            "left_gripper",
-            "left_joint_position",
-            "right_gripper",
-            "right_joint_position",
-        ]
+        assert tuple(state_space.spaces) == EXPECTED_F1_STATE_ORDER
         assert sum(space.shape[0] for space in state_space.spaces.values()) == 16
         assert state_space["left_joint_position"].shape == (7,)
         assert state_space["left_gripper"].shape == (1,)
@@ -316,6 +600,27 @@ def test_step_submits_one_scaled_absolute_command_and_preserves_policy_action(
         assert info["policy_action"].dtype == np.float32
         assert info["command_id"] == command.command_id
         assert info["command_status"] is CommandStatus.FINISHED_DISPATCH
+        np.testing.assert_array_equal(
+            info["absolute_left_joint_target_rad"],
+            command.left_joint_target_rad,
+        )
+        np.testing.assert_array_equal(
+            info["absolute_right_joint_target_rad"],
+            command.right_joint_target_rad,
+        )
+        assert info["absolute_left_gripper_target"] == command.left_gripper_target
+        assert info["absolute_right_gripper_target"] == command.right_gripper_target
+        assert info["command_created_at_monotonic_s"] == command.created_at_monotonic_s
+        assert (
+            info["command_accepted_at_monotonic_s"]
+            == controller.last_receipt.accepted_at_monotonic_s
+        )
+        assert (
+            info["command_expires_at_monotonic_s"]
+            == controller.last_receipt.expires_at_monotonic_s
+        )
+        info["absolute_left_joint_target_rad"].fill(99.0)
+        assert not np.any(command.left_joint_target_rad == 99.0)
         assert reward == 0.0
         assert not terminated
         assert not truncated
@@ -407,6 +712,66 @@ def test_step_starts_the_control_period_after_command_submission(
         env.close()
 
 
+@pytest.mark.parametrize(
+    "status",
+    [
+        CommandStatus.REJECTED,
+        CommandStatus.EXPIRED,
+        CommandStatus.CANCELLED,
+        CommandStatus.FAULT,
+    ],
+)
+def test_step_stops_motion_and_raises_for_failed_command_status(
+    monkeypatch: pytest.MonkeyPatch,
+    status: CommandStatus,
+) -> None:
+    controller = RecordingController(policy_status=status)
+    _install_recording_controller(monkeypatch, controller)
+    env = F1RobotEnv(F1RobotConfig(control_period_s=0.001))
+    try:
+        with pytest.raises(ControllerError, match=status.value):
+            env.step(np.zeros(16, dtype=np.float32))
+
+        assert len(controller.stop_reasons) == 1
+        assert env._num_steps == 0
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize(
+    "health",
+    [
+        ControllerHealth(
+            ready=False,
+            faulted=False,
+            reason="not ready",
+            checked_at_monotonic_s=1.0,
+        ),
+        ControllerHealth(
+            ready=True,
+            faulted=True,
+            reason="executor fault",
+            checked_at_monotonic_s=1.0,
+        ),
+    ],
+)
+def test_step_stops_motion_and_raises_for_unhealthy_controller(
+    monkeypatch: pytest.MonkeyPatch,
+    health: ControllerHealth,
+) -> None:
+    controller = RecordingController(health=health)
+    _install_recording_controller(monkeypatch, controller)
+    env = F1RobotEnv(F1RobotConfig(control_period_s=0.001))
+    try:
+        with pytest.raises(ControllerError, match=health.reason):
+            env.step(np.zeros(16, dtype=np.float32))
+
+        assert len(controller.stop_reasons) == 1
+        assert env._num_steps == 0
+    finally:
+        env.close()
+
+
 def test_step_uses_unique_command_ids_and_truncates_at_the_horizon(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -443,6 +808,7 @@ def test_reset_submits_a_separate_command_and_verifies_measured_state(
     )
     env = F1RobotEnv(config)
     try:
+        controller.events.clear()
         observation, info = env.reset(seed=7)
 
         assert controller.policy_commands == []
@@ -474,6 +840,13 @@ def test_reset_submits_a_separate_command_and_verifies_measured_state(
             "reset_command_id": command.command_id,
             "command_status": CommandStatus.FINISHED_DISPATCH,
         }
+        assert [event[0] for event in controller.events[:5]] == [
+            "stop_experiment_motion",
+            "open",
+            "wait_ready",
+            "health",
+            "submit_reset_command",
+        ]
     finally:
         env.close()
 
@@ -525,6 +898,40 @@ def test_reset_has_a_bounded_monotonic_deadline_when_state_does_not_converge(
         assert monotonic() - started_at_s < 0.5
         assert len(controller.reset_commands) == 1
         assert controller.policy_commands == []
+        assert len(controller.stop_reasons) == 2
+    finally:
+        env.close()
+
+
+def test_reset_failed_status_stops_reset_motion_and_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = RecordingController(reset_status=CommandStatus.REJECTED)
+    _install_recording_controller(monkeypatch, controller)
+    env = F1RobotEnv(F1RobotConfig(reset_timeout_s=0.05))
+    try:
+        with pytest.raises(ControllerError, match="rejected"):
+            env.reset()
+
+        assert len(controller.stop_reasons) == 2
+        assert len(controller.reset_commands) == 1
+    finally:
+        env.close()
+
+
+def test_reset_unexpected_exception_stops_reset_motion_and_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = RecordingController()
+    _install_recording_controller(monkeypatch, controller)
+    env = F1RobotEnv(F1RobotConfig(reset_timeout_s=0.05))
+    controller.read_error = RuntimeError("read failed")
+    try:
+        with pytest.raises(RuntimeError, match="read failed"):
+            env.reset()
+
+        assert len(controller.stop_reasons) == 2
+        assert len(controller.reset_commands) == 1
     finally:
         env.close()
 
@@ -548,3 +955,81 @@ def test_close_is_idempotent_and_constructor_failure_closes_controller(
     with pytest.raises(ControllerNotReadyError, match="not ready"):
         F1RobotEnv(F1RobotConfig())
     assert failed_controller.close_calls == 1
+
+
+def test_installed_fake_reset_and_step_use_fresh_receipts_without_ros_imports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ros_modules_before = {
+        name
+        for name in sys.modules
+        if name == "rclpy"
+        or name.startswith("rclpy.")
+        or name == "cv_bridge"
+        or name.startswith("cv_bridge.")
+    }
+    env = F1RobotEnv(
+        F1RobotConfig(
+            control_period_s=0.001,
+            reset_timeout_s=0.05,
+        )
+    )
+    controller = env._active_controller
+    original_read = controller.read_observation
+    newer_than_values: list[float | None] = []
+
+    def recording_read_observation(
+        *,
+        max_age_s: float,
+        max_skew_s: float,
+        newer_than: float | None = None,
+    ) -> RobotObservation:
+        newer_than_values.append(newer_than)
+        return original_read(
+            max_age_s=max_age_s,
+            max_skew_s=max_skew_s,
+            newer_than=newer_than,
+        )
+
+    monkeypatch.setattr(controller, "read_observation", recording_read_observation)
+    try:
+        reset_observation, reset_info = env.reset()
+        action = np.full(16, 0.25, dtype=np.float32)
+        step_observation, reward, terminated, truncated, step_info = env.step(action)
+
+        assert env.observation_space.contains(reset_observation)
+        assert env.observation_space.contains(step_observation)
+        assert reset_info["command_status"] is CommandStatus.FINISHED_DISPATCH
+        assert step_info["command_status"] is CommandStatus.FINISHED_DISPATCH
+        assert reset_info["reset_command_id"] == 0
+        assert step_info["command_id"] == 1
+        assert newer_than_values[0] is not None
+        assert newer_than_values[-1] == step_info["command_accepted_at_monotonic_s"]
+        assert (
+            step_info["command_created_at_monotonic_s"]
+            <= step_info["command_accepted_at_monotonic_s"]
+            < step_info["command_expires_at_monotonic_s"]
+        )
+        np.testing.assert_allclose(
+            step_observation["state"]["left_joint_position"],
+            step_info["absolute_left_joint_target_rad"],
+        )
+        np.testing.assert_allclose(
+            step_observation["state"]["right_joint_position"],
+            step_info["absolute_right_joint_target_rad"],
+        )
+        assert reward == 0.0
+        assert not terminated
+        assert not truncated
+    finally:
+        env.close()
+
+    ros_modules_after = {
+        name
+        for name in sys.modules
+        if name == "rclpy"
+        or name.startswith("rclpy.")
+        or name == "cv_bridge"
+        or name.startswith("cv_bridge.")
+    }
+    assert ros_modules_after == ros_modules_before

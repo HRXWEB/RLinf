@@ -14,7 +14,10 @@
 
 """Platform-level Gymnasium environment for the F1 dual-arm robot."""
 
+from collections import OrderedDict
 from dataclasses import dataclass
+from math import isfinite
+from numbers import Integral, Real
 from threading import Event
 from time import monotonic
 from typing import Any
@@ -33,6 +36,69 @@ from f1_robot_controller import (
     create_controller,
 )
 
+F1_STATE_ORDER = (
+    "left_joint_position",
+    "left_gripper",
+    "right_joint_position",
+    "right_gripper",
+)
+_FAILED_COMMAND_STATUSES = frozenset(
+    {
+        CommandStatus.REJECTED,
+        CommandStatus.EXPIRED,
+        CommandStatus.CANCELLED,
+        CommandStatus.FAULT,
+    }
+)
+
+
+def _finite_float(name: str, value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise TypeError(f"{name} must be a real number")
+    normalized = float(value)
+    if not isfinite(normalized):
+        raise ValueError(f"{name} must be finite")
+    return normalized
+
+
+def _positive_float(name: str, value: object) -> float:
+    normalized = _finite_float(name, value)
+    if normalized <= 0.0:
+        raise ValueError(f"{name} must be positive")
+    return normalized
+
+
+def _nonnegative_float(name: str, value: object) -> float:
+    normalized = _finite_float(name, value)
+    if normalized < 0.0:
+        raise ValueError(f"{name} must be nonnegative")
+    return normalized
+
+
+def _float_tuple(
+    name: str,
+    value: object,
+    *,
+    length: int,
+    minimum: float | None = None,
+) -> tuple[float, ...]:
+    if isinstance(value, (str, bytes)):
+        raise TypeError(f"{name} must be a sequence of {length} real numbers")
+    try:
+        items = tuple(value)  # type: ignore[arg-type]
+    except TypeError as error:
+        raise TypeError(
+            f"{name} must be a sequence of {length} real numbers"
+        ) from error
+    if len(items) != length:
+        raise ValueError(f"{name} must contain exactly {length} values")
+    normalized = tuple(
+        _finite_float(f"{name}[{index}]", item) for index, item in enumerate(items)
+    )
+    if minimum is not None and any(item < minimum for item in normalized):
+        raise ValueError(f"{name} values must be at least {minimum}")
+    return normalized
+
 
 @dataclass
 class F1RobotConfig:
@@ -50,6 +116,55 @@ class F1RobotConfig:
     reset_duration_s: float = 0.01
     reset_timeout_s: float = 1.0
     reset_tolerance_rad: float = 0.01
+
+    def __post_init__(self) -> None:
+        """Normalize immutable sequences and reject unsafe configuration."""
+
+        if type(self.is_dummy) is not bool:
+            raise TypeError("is_dummy must be exactly bool")
+        if isinstance(self.max_num_steps, bool) or not isinstance(
+            self.max_num_steps, Integral
+        ):
+            raise TypeError("max_num_steps must be an integer")
+        if self.max_num_steps <= 0:
+            raise ValueError("max_num_steps must be positive")
+        self.max_num_steps = int(self.max_num_steps)
+
+        positive_fields = (
+            "control_period_s",
+            "max_observation_age_s",
+            "reset_duration_s",
+            "reset_timeout_s",
+            "reset_tolerance_rad",
+        )
+        for name in positive_fields:
+            setattr(self, name, _positive_float(name, getattr(self, name)))
+        nonnegative_fields = (
+            "max_observation_skew_s",
+            "max_gripper_delta",
+        )
+        for name in nonnegative_fields:
+            setattr(self, name, _nonnegative_float(name, getattr(self, name)))
+
+        self.max_joint_delta_rad = _float_tuple(
+            "max_joint_delta_rad",
+            self.max_joint_delta_rad,
+            length=14,
+            minimum=0.0,
+        )
+        self.reset_joint_target_rad = _float_tuple(
+            "reset_joint_target_rad",
+            self.reset_joint_target_rad,
+            length=14,
+        )
+        self.reset_gripper_target = _float_tuple(
+            "reset_gripper_target",
+            self.reset_gripper_target,
+            length=2,
+            minimum=0.0,
+        )
+        if any(value > 1.0 for value in self.reset_gripper_target):
+            raise ValueError("reset_gripper_target values must be in [0, 1]")
 
 
 class F1RobotEnv(gym.Env):
@@ -75,12 +190,14 @@ class F1RobotEnv(gym.Env):
         self.observation_space = gym.spaces.Dict(
             {
                 "state": gym.spaces.Dict(
-                    {
-                        "left_joint_position": self._float_vector_space(7),
-                        "left_gripper": self._gripper_space(),
-                        "right_joint_position": self._float_vector_space(7),
-                        "right_gripper": self._gripper_space(),
-                    }
+                    OrderedDict(
+                        (
+                            ("left_joint_position", self._float_vector_space(7)),
+                            ("left_gripper", self._gripper_space()),
+                            ("right_joint_position", self._float_vector_space(7)),
+                            ("right_gripper", self._gripper_space()),
+                        )
+                    )
                 ),
                 "frames": gym.spaces.Dict(
                     {
@@ -262,6 +379,31 @@ class F1RobotEnv(gym.Env):
         del observation
         return False
 
+    def _require_healthy_controller(self, context: str) -> None:
+        health = self._active_controller.health()
+        if not health.ready or health.faulted:
+            detail = health.reason or "controller is not ready"
+            raise ControllerError(f"{context}: {detail}")
+
+    @staticmethod
+    def _require_successful_status(
+        status: CommandStatus,
+        *,
+        command_id: int,
+        context: str,
+    ) -> None:
+        if status in _FAILED_COMMAND_STATUSES:
+            raise ControllerError(
+                f"{context} command {command_id} failed with {status.value}"
+            )
+
+    def _stop_after_failure(self, context: str, error: BaseException) -> None:
+        try:
+            self._active_controller.stop_experiment_motion(f"{context} failed: {error}")
+        except BaseException:
+            # Preserve the failure that required the safety stop.
+            pass
+
     def _reset_command(self) -> DualArmResetCommand:
         joint_target = np.asarray(
             self.config.reset_joint_target_rad,
@@ -314,43 +456,47 @@ class F1RobotEnv(gym.Env):
 
         super().reset(seed=seed)
         del options
-        command = self._reset_command()
-        deadline_s = monotonic() + self.config.reset_timeout_s
-        receipt = self._active_controller.submit_reset_command(command)
-        failed_statuses = {
-            CommandStatus.REJECTED,
-            CommandStatus.EXPIRED,
-            CommandStatus.CANCELLED,
-            CommandStatus.FAULT,
-        }
-        while True:
-            status = self._active_controller.get_command_status(command.command_id)
-            if status in failed_statuses:
-                raise ControllerError(
-                    f"reset command {command.command_id} failed with {status.value}"
+        controller = self._active_controller
+        controller.stop_experiment_motion("starting robot reset")
+        try:
+            controller.open()
+            controller.wait_ready(timeout_s=self.config.reset_timeout_s)
+            self._require_healthy_controller("reset readiness check failed")
+            command = self._reset_command()
+            deadline_s = monotonic() + self.config.reset_timeout_s
+            receipt = controller.submit_reset_command(command)
+            while True:
+                status = controller.get_command_status(command.command_id)
+                self._require_successful_status(
+                    status,
+                    command_id=command.command_id,
+                    context="reset",
                 )
-            try:
-                measured = self._read_observation(
-                    newer_than=receipt.accepted_at_monotonic_s
-                )
-            except ObservationUnavailableError:
-                measured = None
-            if measured is not None and self._reset_has_converged(
-                measured,
-                command,
-            ):
-                self._num_steps = 0
-                return self._policy_observation(measured), {
-                    "reset_command_id": command.command_id,
-                    "command_status": status,
-                }
-            remaining_s = deadline_s - monotonic()
-            if remaining_s <= 0.0:
-                raise TimeoutError(
-                    f"reset command {command.command_id} did not converge within "
-                    f"{self.config.reset_timeout_s} seconds"
-                )
-            self._period_wait.wait(min(self.config.control_period_s, remaining_s))
+                try:
+                    measured = self._read_observation(
+                        newer_than=receipt.accepted_at_monotonic_s
+                    )
+                except ObservationUnavailableError:
+                    measured = None
+                if measured is not None and self._reset_has_converged(
+                    measured,
+                    command,
+                ):
+                    self._num_steps = 0
+                    return self._policy_observation(measured), {
+                        "reset_command_id": command.command_id,
+                        "command_status": status,
+                    }
+                remaining_s = deadline_s - monotonic()
+                if remaining_s <= 0.0:
+                    raise TimeoutError(
+                        f"reset command {command.command_id} did not converge within "
+                        f"{self.config.reset_timeout_s} seconds"
+                    )
+                self._period_wait.wait(min(self.config.control_period_s, remaining_s))
+        except BaseException as error:
+            self._stop_after_failure("reset motion", error)
+            raise
 
     def step(
         self,
@@ -361,14 +507,25 @@ class F1RobotEnv(gym.Env):
         policy_action = self._validated_action(action)
         measured_before = self._read_observation()
         command = self._absolute_command(policy_action, measured_before)
-        receipt = self._active_controller.submit_command(command)
-        period_deadline = monotonic() + self.config.control_period_s
-        remaining_s = period_deadline - monotonic()
-        if remaining_s > 0.0:
-            self._period_wait.wait(remaining_s)
-        measured_after = self._read_observation(
-            newer_than=receipt.accepted_at_monotonic_s
-        )
+        try:
+            receipt = self._active_controller.submit_command(command)
+            period_deadline = monotonic() + self.config.control_period_s
+            remaining_s = period_deadline - monotonic()
+            if remaining_s > 0.0:
+                self._period_wait.wait(remaining_s)
+            measured_after = self._read_observation(
+                newer_than=receipt.accepted_at_monotonic_s
+            )
+            status = self._active_controller.get_command_status(command.command_id)
+            self._require_successful_status(
+                status,
+                command_id=command.command_id,
+                context="policy",
+            )
+            self._require_healthy_controller("policy health check failed")
+        except BaseException as error:
+            self._stop_after_failure("policy motion", error)
+            raise
         observation = self._policy_observation(measured_after)
         self._num_steps += 1
         reward = self._calc_step_reward(observation)
@@ -377,9 +534,22 @@ class F1RobotEnv(gym.Env):
         info = {
             "policy_action": policy_action.copy(),
             "command_id": command.command_id,
-            "command_status": self._active_controller.get_command_status(
-                command.command_id
+            "command_status": status,
+            "absolute_left_joint_target_rad": np.array(
+                command.left_joint_target_rad,
+                dtype=np.float64,
+                copy=True,
             ),
+            "absolute_left_gripper_target": command.left_gripper_target,
+            "absolute_right_joint_target_rad": np.array(
+                command.right_joint_target_rad,
+                dtype=np.float64,
+                copy=True,
+            ),
+            "absolute_right_gripper_target": command.right_gripper_target,
+            "command_created_at_monotonic_s": command.created_at_monotonic_s,
+            "command_accepted_at_monotonic_s": receipt.accepted_at_monotonic_s,
+            "command_expires_at_monotonic_s": receipt.expires_at_monotonic_s,
         }
         return observation, reward, terminated, truncated, info
 

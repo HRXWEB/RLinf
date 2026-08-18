@@ -54,11 +54,25 @@ class RealWorldEnv(gym.Env):
         self.num_group = num_envs // cfg.group_size
         self.group_size = cfg.group_size
         self.main_image_key = cfg.main_image_key
+        configured_state_order = cfg.get("state_order", None)
+        if configured_state_order is None:
+            self.state_order = None
+        else:
+            if isinstance(configured_state_order, (str, bytes)):
+                raise ValueError("state_order must be a sequence of unique keys")
+            self.state_order = tuple(configured_state_order)
+            if not all(isinstance(key, str) for key in self.state_order):
+                raise ValueError("state_order keys must be strings")
+            if len(self.state_order) != len(set(self.state_order)):
+                raise ValueError("state_order must contain unique keys")
         self.manual_episode_control_only = bool(
             self.override_cfg.get("manual_episode_control_only", False)
         )
 
         self._init_env()
+        if self.state_order is not None:
+            state_space = self.env.single_observation_space["state"]
+            self._validate_configured_state_order(state_space.spaces)
 
         self._is_start = True
         self._init_metrics()
@@ -212,7 +226,12 @@ class RealWorldEnv(gym.Env):
         obs = {}
 
         state = raw_obs["state"]
-        full_states = np.concatenate([state[k] for k in sorted(state)], axis=-1)
+        if self.state_order is None:
+            state_keys = sorted(state)
+        else:
+            self._validate_configured_state_order(state)
+            state_keys = self.state_order
+        full_states = np.concatenate([state[k] for k in state_keys], axis=-1)
         obs["states"] = full_states
 
         frames = raw_obs["frames"]
@@ -230,6 +249,14 @@ class RealWorldEnv(gym.Env):
         obs = to_tensor(obs)
         obs["task_descriptions"] = self.task_descriptions
         return obs
+
+    def _validate_configured_state_order(self, state_keys):
+        if len(self.state_order) != len(state_keys) or set(self.state_order) != set(
+            state_keys
+        ):
+            raise ValueError(
+                "configured state_order must exactly match observation state keys"
+            )
 
     def step(self, actions=None, auto_reset=True):
         if isinstance(actions, torch.Tensor):
