@@ -29,10 +29,12 @@ from f1_robot_controller import (
     CommandStatus,
     ControllerError,
     ControllerHealth,
+    ControllerLifecycleError,
     ControllerNotReadyError,
     DualArmCommand,
     DualArmResetCommand,
     F1RobotController,
+    ObservationUnavailableError,
     RobotObservation,
     SensorTimestamps,
 )
@@ -127,8 +129,10 @@ class RecordingController(F1RobotController):
             reason=None,
             checked_at_monotonic_s=1.0,
         )
+        self.health_error_once: Exception | None = None
         self.ready_error = ready_error
         self.read_error: Exception | None = None
+        self.stop_error: Exception | None = None
         self.policy_commands: list[DualArmCommand] = []
         self.reset_commands: list[DualArmResetCommand] = []
         self.statuses: dict[int, CommandStatus] = {}
@@ -217,11 +221,17 @@ class RecordingController(F1RobotController):
 
     def health(self) -> ControllerHealth:
         self.events.append(("health", None))
+        if self.health_error_once is not None:
+            error = self.health_error_once
+            self.health_error_once = None
+            raise error
         return self.controller_health
 
     def stop_experiment_motion(self, reason: str) -> None:
         self.events.append(("stop_experiment_motion", reason))
         self.stop_reasons.append(reason)
+        if self.stop_error is not None:
+            raise self.stop_error
 
     def close(self) -> None:
         self.close_calls += 1
@@ -662,6 +672,28 @@ def test_step_rejects_invalid_policy_actions_before_submission(
         env.close()
 
 
+def test_step_initial_observation_failure_stops_without_masking_or_submitting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = RecordingController()
+    stale_error = ObservationUnavailableError("initial observation is stale")
+    controller.read_error = stale_error
+    controller.stop_error = ControllerLifecycleError("stop cleanup failed")
+    _install_recording_controller(monkeypatch, controller)
+    env = F1RobotEnv(F1RobotConfig())
+    try:
+        with pytest.raises(ObservationUnavailableError) as captured:
+            env.step(np.zeros(16, dtype=np.float32))
+
+        assert captured.value is stale_error
+        assert len(controller.stop_reasons) == 1
+        assert controller.policy_commands == []
+        assert controller.reset_commands == []
+        assert env._num_steps == 0
+    finally:
+        env.close()
+
+
 def test_step_returns_copies_of_controller_observation_buffers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -840,7 +872,8 @@ def test_reset_submits_a_separate_command_and_verifies_measured_state(
             "reset_command_id": command.command_id,
             "command_status": CommandStatus.FINISHED_DISPATCH,
         }
-        assert [event[0] for event in controller.events[:5]] == [
+        assert [event[0] for event in controller.events[:6]] == [
+            "health",
             "stop_experiment_motion",
             "open",
             "wait_ready",
@@ -915,6 +948,76 @@ def test_reset_failed_status_stops_reset_motion_and_raises(
 
         assert len(controller.stop_reasons) == 2
         assert len(controller.reset_commands) == 1
+    finally:
+        env.close()
+
+
+def test_reset_reopens_stopped_controller_without_repeating_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = RecordingController()
+    _install_recording_controller(monkeypatch, controller)
+    env = F1RobotEnv(F1RobotConfig(reset_timeout_s=0.05))
+    controller.health_error_once = ControllerNotReadyError("controller is stopped")
+    controller.events.clear()
+    try:
+        observation, info = env.reset()
+
+        assert env.observation_space.contains(observation)
+        assert info["command_status"] is CommandStatus.FINISHED_DISPATCH
+        assert controller.stop_reasons == []
+        assert [event[0] for event in controller.events[:5]] == [
+            "health",
+            "open",
+            "wait_ready",
+            "health",
+            "submit_reset_command",
+        ]
+    finally:
+        env.close()
+
+
+def test_reset_does_not_treat_other_health_errors_as_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = RecordingController()
+    _install_recording_controller(monkeypatch, controller)
+    env = F1RobotEnv(F1RobotConfig(reset_timeout_s=0.05))
+    health_error = ControllerLifecycleError("health probe failed")
+    controller.health_error_once = health_error
+    controller.events.clear()
+    try:
+        with pytest.raises(ControllerLifecycleError) as captured:
+            env.reset()
+
+        assert captured.value is health_error
+        assert controller.stop_reasons == []
+        assert [event[0] for event in controller.events] == ["health"]
+        assert controller.reset_commands == []
+    finally:
+        env.close()
+
+
+def test_reset_preserves_active_controller_stop_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = RecordingController()
+    _install_recording_controller(monkeypatch, controller)
+    env = F1RobotEnv(F1RobotConfig(reset_timeout_s=0.05))
+    stop_error = ControllerLifecycleError("previous motion could not stop")
+    controller.stop_error = stop_error
+    controller.events.clear()
+    try:
+        with pytest.raises(ControllerLifecycleError) as captured:
+            env.reset()
+
+        assert captured.value is stop_error
+        assert len(controller.stop_reasons) == 1
+        assert [event[0] for event in controller.events] == [
+            "health",
+            "stop_experiment_motion",
+        ]
+        assert controller.reset_commands == []
     finally:
         env.close()
 
@@ -1033,3 +1136,56 @@ def test_installed_fake_reset_and_step_use_fresh_receipts_without_ros_imports(
         or name.startswith("cv_bridge.")
     }
     assert ros_modules_after == ros_modules_before
+
+
+def test_installed_fake_recovers_from_step_read_failure_through_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = F1RobotEnv(
+        F1RobotConfig(
+            control_period_s=0.001,
+            reset_timeout_s=0.05,
+        )
+    )
+    controller = env._active_controller
+    original_read = controller.read_observation
+    stale_error = ObservationUnavailableError("synthetic stale observation")
+    fail_next_read = True
+
+    def one_shot_failed_read(
+        *,
+        max_age_s: float,
+        max_skew_s: float,
+        newer_than: float | None = None,
+    ) -> RobotObservation:
+        nonlocal fail_next_read
+        if fail_next_read:
+            fail_next_read = False
+            raise stale_error
+        return original_read(
+            max_age_s=max_age_s,
+            max_skew_s=max_skew_s,
+            newer_than=newer_than,
+        )
+
+    monkeypatch.setattr(controller, "read_observation", one_shot_failed_read)
+    try:
+        with pytest.raises(ObservationUnavailableError) as captured:
+            env.step(np.zeros(16, dtype=np.float32))
+        assert captured.value is stale_error
+        with pytest.raises(ControllerNotReadyError):
+            controller.health()
+
+        reset_observation, reset_info = env.reset()
+        step_result = env.step(np.zeros(16, dtype=np.float32))
+
+        assert env.observation_space.contains(reset_observation)
+        assert reset_info["reset_command_id"] == 0
+        assert reset_info["command_status"] is CommandStatus.FINISHED_DISPATCH
+        assert step_result[4]["command_id"] == 1
+        assert step_result[4]["command_status"] is CommandStatus.FINISHED_DISPATCH
+        health = controller.health()
+        assert health.ready
+        assert not health.faulted
+    finally:
+        env.close()

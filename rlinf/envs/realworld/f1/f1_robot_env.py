@@ -28,6 +28,7 @@ from f1_robot_controller import (
     CommandStatus,
     ControllerConfig,
     ControllerError,
+    ControllerNotReadyError,
     DualArmCommand,
     DualArmResetCommand,
     F1RobotController,
@@ -404,6 +405,17 @@ class F1RobotEnv(gym.Env):
             # Preserve the failure that required the safety stop.
             pass
 
+    @staticmethod
+    def _stop_previous_motion_if_active(
+        controller: F1RobotController,
+    ) -> None:
+        try:
+            health = controller.health()
+        except ControllerNotReadyError:
+            return
+        if health.ready and not health.faulted:
+            controller.stop_experiment_motion("starting robot reset")
+
     def _reset_command(self) -> DualArmResetCommand:
         joint_target = np.asarray(
             self.config.reset_joint_target_rad,
@@ -457,7 +469,7 @@ class F1RobotEnv(gym.Env):
         super().reset(seed=seed)
         del options
         controller = self._active_controller
-        controller.stop_experiment_motion("starting robot reset")
+        self._stop_previous_motion_if_active(controller)
         try:
             controller.open()
             controller.wait_ready(timeout_s=self.config.reset_timeout_s)
@@ -505,7 +517,11 @@ class F1RobotEnv(gym.Env):
         """Apply one normalized delta as one absolute Controller command."""
 
         policy_action = self._validated_action(action)
-        measured_before = self._read_observation()
+        try:
+            measured_before = self._read_observation()
+        except BaseException as error:
+            self._stop_after_failure("initial policy observation", error)
+            raise
         command = self._absolute_command(policy_action, measured_before)
         try:
             receipt = self._active_controller.submit_command(command)
