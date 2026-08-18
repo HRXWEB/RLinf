@@ -108,6 +108,56 @@ def test_config_has_fixed_dual_arm_reset_targets(task_module: ModuleType) -> Non
     assert config.max_num_steps == 4
 
 
+@pytest.mark.parametrize(
+    ("overrides", "expected_field"),
+    [
+        (
+            {"reset_joint_target_rad": (0.1,) + (0.0,) * 13},
+            "reset_joint_target_rad",
+        ),
+        ({"reset_gripper_target": (0.4, 0.5)}, "reset_gripper_target"),
+        ({"max_num_steps": 5}, "max_num_steps"),
+    ],
+    ids=["noncanonical-joints", "noncanonical-grippers", "noncanonical-horizon"],
+)
+def test_noncanonical_task_contract_fails_before_controller_creation(
+    task_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, object],
+    expected_field: str,
+) -> None:
+    controller_factory_calls: list[object] = []
+    env_module = sys.modules["rlinf.envs.realworld.f1.f1_robot_env"]
+
+    def fail_if_controller_is_created(**kwargs: object) -> object:
+        controller_factory_calls.append(kwargs)
+        raise AssertionError("invalid task config must not create a controller")
+
+    monkeypatch.setattr(env_module, "create_controller", fail_if_controller_is_created)
+
+    with pytest.raises(ValueError, match=expected_field):
+        _make_task_env(**overrides)
+
+    assert controller_factory_calls == []
+
+
+def test_explicit_canonical_task_contract_is_accepted(
+    task_module: ModuleType,
+) -> None:
+    env = _make_task_env(
+        reset_joint_target_rad=[0.0] * 14,
+        reset_gripper_target=[0.5, 0.5],
+        max_num_steps=4,
+    )
+    try:
+        assert isinstance(env.unwrapped, task_module.DualArmPegInsertionEnv)
+        assert env.unwrapped.config.reset_joint_target_rad == (0.0,) * 14
+        assert env.unwrapped.config.reset_gripper_target == (0.5, 0.5)
+        assert env.unwrapped.config.max_num_steps == 4
+    finally:
+        env.close()
+
+
 def test_unknown_task_override_fails_closed(task_module: ModuleType) -> None:
     del task_module
 

@@ -20,14 +20,29 @@ from typing import Any
 
 from ..f1_robot_env import F1RobotConfig, F1RobotEnv
 
+_CANONICAL_RESET_JOINT_TARGET_RAD = (0.0,) * 14
+_CANONICAL_RESET_GRIPPER_TARGET = (0.5, 0.5)
+_CANONICAL_MAX_NUM_STEPS = 4
+
 
 @dataclass
 class DualArmPegInsertionConfig(F1RobotConfig):
     """Frozen phase-one configuration for dual-arm peg insertion."""
 
-    reset_joint_target_rad: tuple[float, ...] = (0.0,) * 14
-    reset_gripper_target: tuple[float, float] = (0.5, 0.5)
-    max_num_steps: int = 4
+    reset_joint_target_rad: tuple[float, ...] = _CANONICAL_RESET_JOINT_TARGET_RAD
+    reset_gripper_target: tuple[float, float] = _CANONICAL_RESET_GRIPPER_TARGET
+    max_num_steps: int = _CANONICAL_MAX_NUM_STEPS
+
+    def __post_init__(self) -> None:
+        """Normalize base values, then enforce the frozen task contract."""
+
+        super().__post_init__()
+        if self.reset_joint_target_rad != _CANONICAL_RESET_JOINT_TARGET_RAD:
+            raise ValueError("reset_joint_target_rad must use the canonical target")
+        if self.reset_gripper_target != _CANONICAL_RESET_GRIPPER_TARGET:
+            raise ValueError("reset_gripper_target must use the canonical target")
+        if self.max_num_steps != _CANONICAL_MAX_NUM_STEPS:
+            raise ValueError("max_num_steps must be 4 for this task")
 
 
 class DualArmPegInsertionEnv(F1RobotEnv):
