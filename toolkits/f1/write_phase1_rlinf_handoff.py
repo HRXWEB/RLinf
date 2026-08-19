@@ -3,14 +3,7 @@
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 
-"""Write a digest-bound, fail-closed handoff for F1 phase-one RLinf work.
-
-The unit runner must append ``F1_UNIT_TESTS_PASSED`` only after its command
-exits zero.  The GPU E2E runner must append the strict evidence JSON and then
-``F1_E2E_PASSED`` only after the training command exits zero.  The evidence
-JSON is deliberately extracted from the real training log by that runner; this
-writer treats a log as an immutable execution record, not as a command runner.
-"""
+"""Write a digest-bound, fail-closed handoff for F1 phase-one RLinf work."""
 
 import argparse
 import hashlib
@@ -22,6 +15,7 @@ import re
 import stat
 import subprocess
 import tempfile
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
@@ -30,13 +24,14 @@ EXPECTED_ORIGIN = "git@github.com:HRXWEB/RLinf.git"
 SCHEMA_VERSION = "phase1-rlinf-handoff-v1"
 PRIMARY_CONFIG_NAME = "realworld_dummy_f1_peg_sac_cnn_async"
 E2E_CONFIG_NAME = "realworld_f1_dummy_sac_cnn"
-UNIT_COMMAND = ".venv/bin/pytest tests/unit_tests/f1 -q"
-E2E_COMMAND = "bash tests/e2e_tests/embodied/run_async.sh realworld_f1_dummy_sac_cnn"
-UNIT_SENTINEL = "F1_UNIT_TESTS_PASSED"
-E2E_SENTINEL = "F1_E2E_PASSED"
-E2E_EVIDENCE_PREFIX = "F1_E2E_EVIDENCE="
+UNIT_COMMAND = [".venv/bin/pytest", "tests/unit_tests/f1", "-q"]
+E2E_COMMAND = [
+    "bash",
+    "tests/e2e_tests/embodied/run_async.sh",
+    "realworld_f1_dummy_sac_cnn",
+]
 WHEEL_NAME = "f1_robot_controller-0.1.0-py3-none-any.whl"
-EXPECTED_E2E_FIELDS = frozenset(
+EXPECTED_E2E_RESULT_FIELDS = frozenset(
     {
         "actor_loss",
         "actor_update_count",
@@ -44,10 +39,11 @@ EXPECTED_E2E_FIELDS = frozenset(
         "critic_update_count",
         "replay_buffer_size",
         "weight_sync_success_total",
+        "status",
     }
 )
 _GIT_SHA = re.compile(r"[0-9a-f]{40}")
-_GLOBAL_STEP = re.compile(r"\bGlobal Step\s*:?\s*2\s*/\s*2\b")
+_UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 
 
 def _load_controller_verifier() -> ModuleType:
@@ -158,99 +154,121 @@ def _read_regular_snapshot(path: Path, label: str) -> bytes:
     return snapshot
 
 
-def _require_final_sentinel(log_text: str, sentinel: str, label: str) -> None:
-    """Require exactly one completion sentinel as the final non-blank line."""
+def _execution_record_path(log_path: Path) -> Path:
+    """Return the committed runner's required sibling record path."""
 
-    lines = log_text.splitlines()
-    while lines and not lines[-1].strip():
-        lines.pop()
-    if not lines or lines[-1] != sentinel or lines.count(sentinel) != 1:
-        raise ValueError(f"{label} must end with exactly one {sentinel}")
+    return log_path.with_suffix(".record.json")
 
 
-def _validate_unit_log(unit_snapshot: bytes) -> None:
-    """Validate the successful unit-run completion contract."""
+def _require_exact_fields(
+    payload: dict[str, object], fields: frozenset[str], label: str
+) -> None:
+    """Require one closed JSON object schema."""
 
+    actual = frozenset(payload)
+    if actual == fields:
+        return
+    extras = actual - fields
+    if extras:
+        raise ValueError(f"{label} contains unrecognized field {sorted(extras)[0]}")
+    raise ValueError(f"{label} is missing field {sorted(fields - actual)[0]}")
+
+
+def _require_integer(value: object, field: str, minimum: int) -> int:
+    """Require a JSON integer at least ``minimum`` without accepting bool."""
+
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ValueError(f"execution record {field} must be an integer >= {minimum}")
+    return value
+
+
+def _validate_execution_record(
+    kind: str,
+    log_path: Path,
+    log_snapshot: bytes,
+    commit: str,
+) -> bytes:
+    """Require a runner-produced record bound to this log, command, and commit."""
+
+    record_snapshot = _read_regular_snapshot(
+        _execution_record_path(log_path), f"{kind} execution record"
+    )
     try:
-        unit_text = unit_snapshot.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise ValueError("unit log must be UTF-8") from error
-    _require_final_sentinel(unit_text, UNIT_SENTINEL, "unit log")
-
-
-def _validate_number(value: object, field: str) -> float:
-    """Return one finite JSON number while rejecting bool and non-number values."""
-
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"F1_E2E_EVIDENCE field {field} must be a number")
-    number = float(value)
-    if not math.isfinite(number):
-        raise ValueError(f"F1_E2E_EVIDENCE field {field} must be finite")
-    return number
-
-
-def _validate_e2e_evidence(e2e_text: str) -> None:
-    """Validate the required real-training evidence extracted into the E2E log."""
-
-    if _GLOBAL_STEP.search(e2e_text) is None:
-        raise ValueError("E2E log must contain Global Step 2/2")
-    evidence_lines = [
-        line.removeprefix(E2E_EVIDENCE_PREFIX)
-        for line in e2e_text.splitlines()
-        if line.startswith(E2E_EVIDENCE_PREFIX)
-    ]
-    if len(evidence_lines) != 1:
-        raise ValueError("E2E log must contain exactly one F1_E2E_EVIDENCE line")
-    try:
-        evidence = json.loads(evidence_lines[0])
-    except json.JSONDecodeError as error:
-        raise ValueError("F1_E2E_EVIDENCE must contain valid JSON") from error
-    if not isinstance(evidence, dict):
-        raise ValueError("F1_E2E_EVIDENCE must be a JSON object")
-    evidence_fields = frozenset(evidence)
-    if evidence_fields != EXPECTED_E2E_FIELDS:
-        extras = evidence_fields - EXPECTED_E2E_FIELDS
-        if extras:
-            raise ValueError(
-                f"F1_E2E_EVIDENCE contains unrecognized field {sorted(extras)[0]}"
-            )
-        raise ValueError(
-            "F1_E2E_EVIDENCE is missing field "
-            f"{sorted(EXPECTED_E2E_FIELDS - evidence_fields)[0]}"
+        payload = json.loads(record_snapshot.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"{kind} execution record must be valid UTF-8 JSON") from error
+    if not isinstance(payload, dict):
+        raise ValueError(f"{kind} execution record must contain a JSON object")
+    _require_exact_fields(
+        payload,
+        frozenset(
+            {
+                "command",
+                "exit_code",
+                "finished_at",
+                "kind",
+                "log_filename",
+                "log_sha256",
+                "repository_url",
+                "result",
+                "rlinf_commit",
+                "schema_version",
+                "started_at",
+            }
+        ),
+        f"{kind} execution record",
+    )
+    command = UNIT_COMMAND if kind == "unit" else E2E_COMMAND
+    if payload["schema_version"] != "f1-execution-record-v1":
+        raise ValueError(f"{kind} execution record has an unsupported schema_version")
+    if payload["kind"] != kind or payload["command"] != command:
+        raise ValueError(f"{kind} execution record is not for the required command")
+    if payload["repository_url"] != EXPECTED_ORIGIN:
+        raise ValueError(f"{kind} execution record repository origin does not match")
+    if payload["rlinf_commit"] != commit:
+        raise ValueError(f"{kind} execution record commit does not match RLinf HEAD")
+    if payload["log_filename"] != log_path.name:
+        raise ValueError(f"{kind} execution record log filename does not match")
+    if payload["log_sha256"] != hashlib.sha256(log_snapshot).hexdigest():
+        raise ValueError(f"{kind} execution record log SHA-256 does not match")
+    if (
+        isinstance(payload["exit_code"], bool)
+        or not isinstance(payload["exit_code"], int)
+        or payload["exit_code"] != 0
+    ):
+        raise ValueError(f"{kind} execution record exit_code must be integer zero")
+    if not all(
+        isinstance(payload[field], str) and _UTC_TIMESTAMP.fullmatch(payload[field])
+        for field in ("started_at", "finished_at")
+    ):
+        raise ValueError(f"{kind} execution record timestamps must be UTC")
+    result = payload["result"]
+    if not isinstance(result, dict):
+        raise ValueError(f"{kind} execution record result must be a JSON object")
+    if kind == "unit":
+        _require_exact_fields(
+            result, frozenset({"pytest_passed", "status"}), "unit result"
         )
-    replay_size = _validate_number(evidence["replay_buffer_size"], "replay_buffer_size")
-    actor_updates = _validate_number(
-        evidence["actor_update_count"], "actor_update_count"
-    )
-    critic_updates = _validate_number(
-        evidence["critic_update_count"], "critic_update_count"
-    )
-    sync_count = _validate_number(
-        evidence["weight_sync_success_total"], "weight_sync_success_total"
-    )
-    if not replay_size.is_integer() or replay_size < 1:
-        raise ValueError("F1_E2E_EVIDENCE replay_buffer_size must be an integer >= 1")
-    if not actor_updates.is_integer() or actor_updates < 1:
-        raise ValueError("F1_E2E_EVIDENCE actor_update_count must be an integer >= 1")
-    if not critic_updates.is_integer() or critic_updates < 1:
-        raise ValueError("F1_E2E_EVIDENCE critic_update_count must be an integer >= 1")
-    if not sync_count.is_integer() or sync_count < 2:
-        raise ValueError(
-            "F1_E2E_EVIDENCE weight_sync_success_total must be an integer >= 2"
-        )
-    _validate_number(evidence["actor_loss"], "actor_loss")
-    _validate_number(evidence["critic_loss"], "critic_loss")
-
-
-def _validate_e2e_log(e2e_snapshot: bytes) -> None:
-    """Validate the successful E2E completion and metric evidence contract."""
-
-    try:
-        e2e_text = e2e_snapshot.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise ValueError("E2E log must be UTF-8") from error
-    _require_final_sentinel(e2e_text, E2E_SENTINEL, "E2E log")
-    _validate_e2e_evidence(e2e_text)
+        _require_integer(result["pytest_passed"], "pytest_passed", 1)
+    else:
+        _require_exact_fields(result, EXPECTED_E2E_RESULT_FIELDS, "E2E result")
+        for field, minimum in (
+            ("replay_buffer_size", 1),
+            ("actor_update_count", 1),
+            ("critic_update_count", 1),
+            ("weight_sync_success_total", 2),
+        ):
+            _require_integer(result[field], field, minimum)
+        for field in ("actor_loss", "critic_loss"):
+            if (
+                isinstance(result[field], bool)
+                or not isinstance(result[field], (int, float))
+                or not math.isfinite(float(result[field]))
+            ):
+                raise ValueError(f"execution record {field} must be a number")
+    if result.get("status") != "passed":
+        raise ValueError(f"{kind} execution record result is not passed")
+    return record_snapshot
 
 
 def _snapshot_controller(
@@ -299,14 +317,59 @@ def _path_is_within(path: Path, root: Path) -> bool:
     return True
 
 
+def _absolute_path(path: Path) -> Path:
+    """Return an absolute lexical path without resolving symlinks."""
+
+    return Path(os.path.abspath(path))
+
+
+def _open_directory_no_follow(directory: Path) -> int:
+    """Open every absolute path component with ``O_NOFOLLOW``."""
+
+    absolute = _absolute_path(directory)
+    if not absolute.is_absolute():
+        raise ValueError("handoff output parent must be absolute")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    descriptor = os.open(absolute.anchor, flags)
+    try:
+        for component in absolute.parts[1:]:
+            next_descriptor = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+    except OSError as error:
+        os.close(descriptor)
+        raise ValueError("handoff output has a missing or symlink ancestor") from error
+    return descriptor
+
+
+def _same_directory(path: Path, descriptor: int) -> bool:
+    """Return whether ``path`` still identifies the opened directory."""
+
+    try:
+        current = _open_directory_no_follow(path)
+    except ValueError:
+        return False
+    try:
+        return (
+            _file_identity(os.fstat(current))[:2]
+            == _file_identity(os.fstat(descriptor))[:2]
+        )
+    finally:
+        os.close(current)
+
+
 def _validate_output_path(output: Path, repository_root: Path) -> Path:
     """Reject symlink, tracked, and unsafe in-repository handoff destinations."""
 
-    output_path = output.absolute()
-    if output_path.is_symlink():
+    output_path = _absolute_path(output)
+    try:
+        output_status = os.lstat(output_path)
+    except FileNotFoundError:
+        output_status = None
+    if output_status is not None and stat.S_ISLNK(output_status.st_mode):
         raise ValueError("handoff output must not be a symlink")
-    if not output_path.parent.is_dir() or output_path.parent.is_symlink():
-        raise ValueError("handoff output parent must be a real existing directory")
+    descriptor = _open_directory_no_follow(output_path.parent)
+    os.close(descriptor)
     if _path_is_within(output_path, repository_root):
         relative_output = str(output_path.relative_to(repository_root))
         try:
@@ -345,23 +408,63 @@ def _validate_output_path(output: Path, repository_root: Path) -> Path:
     return output_path
 
 
-def _atomic_write(output: Path, payload: dict[str, object]) -> None:
-    """Persist canonical JSON via fsync and one atomic replacement."""
+def _atomic_write_bytes(output: Path, data: bytes) -> None:
+    """Write one file through a no-follow parent descriptor and atomically replace."""
 
-    data = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{output.name}.", suffix=".tmp", dir=output.parent
-    )
-    temporary_path = Path(temporary_name)
+    output_path = _absolute_path(output)
+    descriptor = _open_directory_no_follow(output_path.parent)
+    temporary_name = f".{output_path.name}.{uuid.uuid4().hex}.tmp"
+    temporary_descriptor: int | None = None
     try:
-        with os.fdopen(descriptor, "wb") as temporary_file:
-            temporary_file.write(data)
-            temporary_file.flush()
-            os.fsync(temporary_file.fileno())
-        os.replace(temporary_path, output)
+        temporary_descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=descriptor,
+        )
+        written = 0
+        while written < len(data):
+            written += os.write(temporary_descriptor, data[written:])
+        os.fsync(temporary_descriptor)
+        os.close(temporary_descriptor)
+        temporary_descriptor = None
+        if not _same_directory(output_path.parent, descriptor):
+            raise ValueError("handoff output parent changed during atomic write")
+        try:
+            existing = os.stat(
+                output_path.name, dir_fd=descriptor, follow_symlinks=False
+            )
+        except FileNotFoundError:
+            existing = None
+        if existing is not None and stat.S_ISLNK(existing.st_mode):
+            raise ValueError("handoff output must not be a symlink")
+        os.replace(
+            temporary_name,
+            output_path.name,
+            src_dir_fd=descriptor,
+            dst_dir_fd=descriptor,
+        )
+        os.fsync(descriptor)
+        if not _same_directory(output_path.parent, descriptor):
+            raise ValueError("handoff output parent changed during atomic write")
     except BaseException:
-        temporary_path.unlink(missing_ok=True)
+        if temporary_descriptor is not None:
+            os.close(temporary_descriptor)
+        try:
+            os.unlink(temporary_name, dir_fd=descriptor)
+        except FileNotFoundError:
+            pass
         raise
+    finally:
+        os.close(descriptor)
+
+
+def _atomic_write(output: Path, payload: dict[str, object]) -> None:
+    """Persist canonical JSON via descriptor-confined atomic replacement."""
+
+    _atomic_write_bytes(
+        output, (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    )
 
 
 def _utc_timestamp() -> str:
@@ -403,8 +506,12 @@ def write_handoff(
     )
     unit_snapshot = _read_regular_snapshot(unit_log, "unit log")
     e2e_snapshot = _read_regular_snapshot(e2e_log, "E2E log")
-    _validate_unit_log(unit_snapshot)
-    _validate_e2e_log(e2e_snapshot)
+    unit_record_snapshot = _validate_execution_record(
+        "unit", unit_log, unit_snapshot, commit
+    )
+    e2e_record_snapshot = _validate_execution_record(
+        "e2e", e2e_log, e2e_snapshot, commit
+    )
 
     payload: dict[str, object] = {
         "action_schema": "f1-action-v1",
@@ -416,6 +523,8 @@ def write_handoff(
         "e2e_config_name": E2E_CONFIG_NAME,
         "e2e_log_path": str(e2e_log.resolve(strict=True)),
         "e2e_log_sha256": hashlib.sha256(e2e_snapshot).hexdigest(),
+        "e2e_record_path": str(_execution_record_path(e2e_log).resolve(strict=True)),
+        "e2e_record_sha256": hashlib.sha256(e2e_record_snapshot).hexdigest(),
         "observation_schema": "f1-observation-v1",
         "primary_config_name": PRIMARY_CONFIG_NAME,
         "repository_url": EXPECTED_ORIGIN,
@@ -425,6 +534,8 @@ def write_handoff(
         "unit_command": UNIT_COMMAND,
         "unit_log_path": str(unit_log.resolve(strict=True)),
         "unit_log_sha256": hashlib.sha256(unit_snapshot).hexdigest(),
+        "unit_record_path": str(_execution_record_path(unit_log).resolve(strict=True)),
+        "unit_record_sha256": hashlib.sha256(unit_record_snapshot).hexdigest(),
     }
     _atomic_write(output_path, payload)
     return payload
