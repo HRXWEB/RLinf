@@ -18,7 +18,9 @@ from collections.abc import Mapping
 from typing import Any
 
 import gymnasium as gym
-from gymnasium.envs.registration import WrapperSpec, register, registry
+from gymnasium.envs.registration import WrapperSpec
+
+from rlinf.envs.realworld.registration import register_exact
 
 from ..wrappers import (
     AutomaticOperatorGate,
@@ -89,17 +91,11 @@ def _make_supervised_episode_control(env: gym.Env) -> gym.Env:
         raise
 
 
-_existing_spec = registry.get(_ENV_ID)
-if _existing_spec is None:
-    register(
-        id=_ENV_ID,
-        entry_point=_ENTRY_POINT,
-        additional_wrappers=(_WRAPPER_SPEC,),
-    )
-elif (
-    _existing_spec.entry_point != _ENTRY_POINT
-    or _existing_spec.additional_wrappers != (_WRAPPER_SPEC,)
-):
-    raise RuntimeError(f"{_ENV_ID} is already registered to another entry point")
+register_exact(
+    _ENV_ID,
+    _ENTRY_POINT,
+    allowed_entry_points=frozenset({_ENTRY_POINT}),
+    additional_wrappers=(_WRAPPER_SPEC,),
+)
 
 __all__ = ["DualArmPegInsertionConfig", "DualArmPegInsertionEnv"]

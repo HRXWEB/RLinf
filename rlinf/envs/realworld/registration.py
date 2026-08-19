@@ -18,11 +18,17 @@ import os
 import pathlib
 import time
 from collections.abc import Callable
+from dataclasses import fields
 from importlib import import_module
 from threading import Lock
 from typing import Any, NamedTuple
 
-from gymnasium.envs.registration import EnvSpec, register, registry
+from gymnasium.envs.registration import (
+    EnvSpec,
+    WrapperSpec,
+    register,
+    registry,
+)
 
 F1_ENV_ID = "F1DualArmPegInsertionEnv-v1"
 
@@ -78,35 +84,34 @@ _SETUP_LOCK = Lock()
 _setup_complete = False
 
 
-def _has_default_registration_options(spec: EnvSpec) -> bool:
-    """Return whether a spec matches the legacy registrations' defaults."""
-
-    return (
-        spec.reward_threshold is None
-        and spec.nondeterministic is False
-        and spec.max_episode_steps is None
-        and spec.order_enforce is True
-        and spec.disable_env_checker is False
-        and spec.kwargs == {}
-        and spec.additional_wrappers == ()
-        and spec.vector_entry_point is None
-    )
-
-
-def _register_compatible(
+def register_exact(
     env_id: str,
     entry_point: str,
     *,
     allowed_entry_points: frozenset[str],
+    additional_wrappers: tuple[WrapperSpec, ...] = (),
 ) -> None:
+    """Register or validate an exact Gym spec without hiding conflicts."""
+
+    expected = EnvSpec(
+        id=env_id,
+        entry_point=entry_point,
+        additional_wrappers=additional_wrappers,
+    )
     existing = registry.get(env_id)
     if existing is None:
-        register(id=env_id, entry_point=entry_point)
+        register(
+            id=env_id,
+            entry_point=entry_point,
+            additional_wrappers=additional_wrappers,
+        )
         return
-    if (
-        existing.entry_point not in allowed_entry_points
-        or not _has_default_registration_options(existing)
-    ):
+    metadata_matches = all(
+        getattr(existing, field.name) == getattr(expected, field.name)
+        for field in fields(EnvSpec)
+        if field.name != "entry_point"
+    )
+    if existing.entry_point not in allowed_entry_points or not metadata_matches:
         raise RuntimeError(f"{env_id} is already registered incompatibly")
 
 
@@ -114,7 +119,7 @@ def register_legacy_proxies() -> None:
     """Register dependency-free proxies for every established legacy Gym ID."""
 
     for env_id, registration in _LEGACY_REGISTRATIONS.items():
-        _register_compatible(
+        register_exact(
             env_id,
             registration.proxy_entry_point,
             allowed_entry_points=frozenset(
@@ -133,7 +138,7 @@ def register_legacy_task(env_id: str, entry_point: str) -> None:
     registration = _LEGACY_REGISTRATIONS.get(env_id)
     if registration is None or registration.actual_entry_point != entry_point:
         raise RuntimeError(f"{env_id} is not a known exact legacy registration")
-    _register_compatible(
+    register_exact(
         env_id,
         entry_point,
         allowed_entry_points=frozenset(

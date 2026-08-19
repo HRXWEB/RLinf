@@ -15,6 +15,7 @@
 """Integration coverage for the F1 Gym registration and Hydra config."""
 
 import importlib
+import inspect
 import json
 import subprocess
 import sys
@@ -65,6 +66,24 @@ F1_STATE_ORDER = [
     "right_joint_position",
     "right_gripper",
 ]
+
+
+def _gym_registration_metadata_conflicts() -> dict[str, object]:
+    """Return one non-default value for every supported registration option."""
+
+    candidates: dict[str, object] = {
+        "reward_threshold": 1.0,
+        "nondeterministic": True,
+        "max_episode_steps": 1,
+        "order_enforce": False,
+        "disable_env_checker": True,
+        "kwargs": {"conflict": True},
+        "vector_entry_point": "conflicting.module:create_vector_env",
+        "apply_api_compatibility": True,
+        "autoreset": True,
+    }
+    supported = inspect.signature(gym.register).parameters
+    return {name: value for name, value in candidates.items() if name in supported}
 
 
 def _load_realworld_package(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
@@ -292,6 +311,154 @@ def test_importing_realworld_is_f1_only_and_has_no_process_side_effects() -> Non
 
     with pytest.raises(gym.error.Error):
         gym.spec(LEGACY_ENV_ID)
+
+
+@pytest.mark.parametrize(
+    ("option_name", "option_value"),
+    _gym_registration_metadata_conflicts().items(),
+)
+def test_parent_import_rejects_conflicting_f1_registration_metadata(
+    option_name: str,
+    option_value: object,
+) -> None:
+    registration_option = {option_name: option_value}
+    script = textwrap.dedent(
+        f"""
+        import gymnasium as gym
+        from gymnasium.envs.registration import WrapperSpec
+
+        wrapper = WrapperSpec(
+            name="F1SupervisedEpisodeControl",
+            entry_point=(
+                "rlinf.envs.realworld.f1.tasks:"
+                "_make_supervised_episode_control"
+            ),
+            kwargs={{}},
+        )
+        gym.register(
+            id={ENV_ID!r},
+            entry_point=(
+                "rlinf.envs.realworld.f1.tasks:DualArmPegInsertionEnv"
+            ),
+            additional_wrappers=(wrapper,),
+            **{registration_option!r},
+        )
+        import rlinf.envs.realworld  # noqa: F401
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode != 0
+    assert "RuntimeError" in result.stderr
+    assert ENV_ID in result.stderr
+
+
+def test_parent_import_accepts_only_the_exact_canonical_f1_spec() -> None:
+    script = textwrap.dedent(
+        f"""
+        import importlib
+        import json
+
+        import gymnasium as gym
+        from gymnasium.envs.registration import WrapperSpec
+
+        wrapper = WrapperSpec(
+            name="F1SupervisedEpisodeControl",
+            entry_point=(
+                "rlinf.envs.realworld.f1.tasks:"
+                "_make_supervised_episode_control"
+            ),
+            kwargs={{}},
+        )
+        gym.register(
+            id={ENV_ID!r},
+            entry_point=(
+                "rlinf.envs.realworld.f1.tasks:DualArmPegInsertionEnv"
+            ),
+            additional_wrappers=(wrapper,),
+        )
+        before = gym.spec({ENV_ID!r})
+        import rlinf.envs.realworld.f1.tasks as tasks
+        importlib.reload(tasks)
+        after = gym.spec({ENV_ID!r})
+        print(json.dumps({{
+            "same_spec": before is after,
+            "wrappers": [
+                {{
+                    "name": item.name,
+                    "entry_point": item.entry_point,
+                    "kwargs": item.kwargs,
+                }}
+                for item in after.additional_wrappers
+            ],
+        }}))
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload == {
+        "same_spec": True,
+        "wrappers": [
+            {
+                "name": "F1SupervisedEpisodeControl",
+                "entry_point": (
+                    "rlinf.envs.realworld.f1.tasks:_make_supervised_episode_control"
+                ),
+                "kwargs": {},
+            }
+        ],
+    }
+
+
+def test_parent_import_rejects_conflicting_f1_additional_wrappers() -> None:
+    script = textwrap.dedent(
+        f"""
+        import gymnasium as gym
+        from gymnasium.envs.registration import WrapperSpec
+
+        wrapper = WrapperSpec(
+            name="ConflictingWrapper",
+            entry_point="conflicting.module:wrap",
+            kwargs={{}},
+        )
+        gym.register(
+            id={ENV_ID!r},
+            entry_point=(
+                "rlinf.envs.realworld.f1.tasks:DualArmPegInsertionEnv"
+            ),
+            additional_wrappers=(wrapper,),
+        )
+        import rlinf.envs.realworld  # noqa: F401
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode != 0
+    assert "RuntimeError" in result.stderr
+    assert ENV_ID in result.stderr
 
 
 def test_direct_legacy_gym_factory_runs_setup_once_before_construction(
