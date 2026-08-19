@@ -140,6 +140,11 @@ class AsyncEmbodiedRunner(EmbodiedRunner):
         actor_handle: Handle = self.actor.sync_model_to_rollout()
         self._pending_rollout_weight_sync = (rollout_handle, actor_handle)
 
+    def _weight_sync_metrics(self) -> dict[str, int]:
+        return {
+            "train/weight_sync_success_total": self._weight_sync_success_total,
+        }
+
     def evaluate(self):
         env_handle: Handle = self.env.evaluate(
             input_channel=self.env_channel,
@@ -212,9 +217,7 @@ class AsyncEmbodiedRunner(EmbodiedRunner):
                             actor_result
                         ).items()
                     }
-                    training_metrics["train/weight_sync_success_total"] = (
-                        self._weight_sync_success_total
-                    )
+                    training_metrics.update(self._weight_sync_metrics())
 
                     run_val, save_model, _ = check_progress(
                         self.global_step,

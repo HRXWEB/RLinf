@@ -23,7 +23,7 @@ cluster:
 runner:
   task_type: embodied
   logger:
-    log_path: /workspace/results/realworld_f1_dummy_sac_cnn
+    log_path: ${oc.env:F1_RUN_DIR}
     project_name: rlinf
     experiment_name: ci-test
     logger_backends: [tensorboard]
@@ -91,7 +91,7 @@ rollout:
   collect_prev_infos: false
 
   model:
-    model_path: /path/to/RLinf-ResNet10-pretrained
+    model_path: ${oc.env:F1_MODEL_PATH}
     precision: ${actor.model.precision}
 
   enable_torch_compile: true
@@ -106,7 +106,7 @@ actor:
   enable_offload: false
 
   model:
-    model_path: /path/to/RLinf-ResNet10-pretrained
+    model_path: ${oc.env:F1_MODEL_PATH}
     state_dim: 16
     action_dim: 16
     image_num: 3
