@@ -333,6 +333,7 @@ def test_task_abort_is_a_trainable_failure_without_a_fake_transition(
     with pytest.raises(wrappers_module.EpisodeAbortedError) as raised:
         wrapper.step(np.zeros(1, dtype=np.float32))
 
+    assert raised.value.transition_valid is False
     assert raised.value.event is wrappers_module.OperatorEvent.TASK_ABORT
     assert raised.value.quarantine is False
     assert wrapper.state is wrappers_module.EpisodeState.WAITING_RESET

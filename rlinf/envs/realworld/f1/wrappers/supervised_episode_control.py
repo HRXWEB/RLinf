@@ -58,6 +58,8 @@ class _AcceptedOperatorEvent:
 class EpisodeControlError(RuntimeError):
     """Base error carrying episode-control disposition metadata."""
 
+    transition_valid = False
+
     def __init__(
         self,
         message: str,
