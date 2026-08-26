@@ -17,6 +17,8 @@
      - 在云端与边缘之间拆分推理与训练。
    * - :doc:`真机机器人 <../realworld_robot>`
      - 在真实机器人硬件上运行 RL。
+   * - :doc:`F1 双节点运行环境 <../f1_runtime>`
+     - 复现 F1 的 GPU 宿主机与 ARM64 Thor 环境。
 
 .. toctree::
    :hidden:
@@ -25,3 +27,4 @@
    异构集群 <../hetero>
    云边协同 <../cloud_edge>
    真机机器人 <../realworld_robot>
+   F1 双节点运行环境 <../f1_runtime>

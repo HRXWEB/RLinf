@@ -23,12 +23,14 @@ from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
 from rlinf.config import SupportedModel
+from rlinf.data.embodied.f1_schema import build_f1_replay_descriptor
 from rlinf.data.embodied_buffer_dataset import (
     PreloadReplayBufferDataset,
     ReplayBufferDataset,
     replay_buffer_collate_fn,
 )
 from rlinf.data.embodied_io_struct import Trajectory
+from rlinf.data.f1_replay_admission import F1ReplayAdmission
 from rlinf.data.replay_buffer import TrajectoryReplayBuffer
 from rlinf.models.embodiment.base_policy import ForwardType
 from rlinf.models.embodiment.modules.entropy_tunning import EntropyTemperature
@@ -56,6 +58,8 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         self.target_model = None
         self.entropy_temp = None
         self.demo_buffer = None
+        self.f1_online_admission = None
+        self.f1_demo_admission = None
         self.alpha_optimizer = None
         self.update_step = 0
         self.enable_drq = bool(getattr(self.cfg.actor, "enable_drq", False))
@@ -168,6 +172,16 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
                 self.alpha_optimizer, self.cfg.algorithm.entropy_tuning.optim
             )
 
+    def _build_f1_replay_descriptor(self, source_type: str) -> dict:
+        env_cfg = self.cfg.env.train.get("override_cfg", {})
+        controller_cfg = env_cfg.get("controller", {})
+        return build_f1_replay_descriptor(
+            task_id=env_cfg.get("id", "F1DualArmPegInsertionEnv-v1"),
+            action_scale=dict(env_cfg.get("action_scale", {})),
+            control_period_s=float(controller_cfg.get("control_period_s", 0.1)),
+            source_type=source_type,
+        )
+
     def setup_sac_components(self):
         """Initialize SAC-specific components"""
         # Initialize replay buffer
@@ -192,7 +206,32 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         )
 
         min_demo_buffer_size = 0
+        f1_replay_cfg = self.cfg.algorithm.get("f1_replay", None)
+        f1_replay_enabled = bool(
+            f1_replay_cfg is not None and f1_replay_cfg.get("enabled", False)
+        )
+        if f1_replay_enabled:
+            online_descriptor = self._build_f1_replay_descriptor("online")
+            self.f1_online_admission = F1ReplayAdmission.from_config(
+                enabled=True,
+                descriptor=online_descriptor,
+                source_type="online",
+            )
+        else:
+            self.f1_online_admission = None
+        self.f1_demo_admission = None
         if self.cfg.algorithm.get("demo_buffer", None) is not None:
+            if f1_replay_enabled:
+                demo_load_path = self.cfg.algorithm.demo_buffer.get("load_path", None)
+                if demo_load_path is None:
+                    raise ValueError("F1 RLPD requires demo_buffer.load_path")
+                demo_source_type = f1_replay_cfg.get("demo_source_type", "demo")
+                demo_descriptor = self._build_f1_replay_descriptor(demo_source_type)
+                self.f1_demo_admission = F1ReplayAdmission.from_config(
+                    enabled=True,
+                    descriptor=demo_descriptor,
+                    source_type="demo",
+                )
             auto_save_path = self.cfg.algorithm.demo_buffer.get("auto_save_path", None)
             if auto_save_path is None:
                 auto_save_path = os.path.join(
@@ -217,6 +256,12 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
                     local_rank=self._rank,
                     world_size=self._world_size,
                 )
+                self._validate_loaded_demo_buffer()
+            elif f1_replay_enabled:
+                raise ValueError("F1 RLPD requires preloaded demo data")
+
+            if f1_replay_enabled and len(self.demo_buffer) == 0:
+                raise ValueError("F1 RLPD demo buffer is empty")
 
         if self.cfg.algorithm.replay_buffer.get("enable_preload", False):
             buffer_dataset_cls = PreloadReplayBufferDataset
@@ -228,6 +273,7 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             batch_size=self.cfg.actor.global_batch_size // self._world_size,
             min_replay_buffer_size=self.cfg.algorithm.replay_buffer.min_buffer_size,
             min_demo_buffer_size=min_demo_buffer_size,
+            demo_fraction=self.cfg.algorithm.get("demo_fraction", 0.5),
             prefetch_size=self.cfg.algorithm.replay_buffer.get("prefetch_size", 10),
         )
         self.buffer_dataloader = DataLoader(
@@ -248,6 +294,34 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         assert self.target_update_type in ["all", "q_head_only"], (
             f"{self.target_update_type=} is not suppported!"
         )
+
+    def _validate_loaded_demo_buffer(self) -> None:
+        if self.demo_buffer is None or self.f1_demo_admission is None:
+            return
+
+        for trajectory_id in self.demo_buffer._trajectory_id_list:
+            model_weights_id = self.demo_buffer._trajectory_index[trajectory_id][
+                "model_weights_id"
+            ]
+            trajectory = self.demo_buffer._load_trajectory(
+                trajectory_id,
+                model_weights_id,
+            )
+            self.f1_demo_admission.admit_demo([trajectory])
+
+    def _admit_online_trajectories(
+        self, trajectories: list[Trajectory]
+    ) -> list[Trajectory]:
+        if self.f1_online_admission is None:
+            return trajectories
+        return self.f1_online_admission.admit_online(trajectories)
+
+    def _admit_demo_trajectories(
+        self, trajectories: list[Trajectory]
+    ) -> list[Trajectory]:
+        if self.f1_demo_admission is None:
+            return trajectories
+        return self.f1_demo_admission.admit_demo(trajectories)
 
     def _init_target_shadow(self):
         """Create persistent float32 shadow of target model parameters.
@@ -330,18 +404,20 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             trajectory: Trajectory = await input_channel.get(async_op=True).async_wait()
             recv_list.append(trajectory)
 
-        self.replay_buffer.add_trajectories(recv_list)
+        admitted_recv_list = self._admit_online_trajectories(recv_list)
+        self.replay_buffer.add_trajectories(admitted_recv_list)
 
         if self.demo_buffer is not None:
             intervene_traj_list = []
-            for traj in recv_list:
+            for traj in admitted_recv_list:
                 assert isinstance(traj, Trajectory)
                 intervene_trajs = traj.extract_intervene_traj()
                 if intervene_trajs is not None:
                     intervene_traj_list.extend(intervene_trajs)
 
             if len(intervene_traj_list) > 0:
-                self.demo_buffer.add_trajectories(intervene_traj_list)
+                admitted_demo_list = self._admit_demo_trajectories(intervene_traj_list)
+                self.demo_buffer.add_trajectories(admitted_demo_list)
 
     @Worker.timer("forward_critic")
     def forward_critic(self, batch):
@@ -668,6 +744,16 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             f"replay_buffer/{key}": value for key, value in replay_buffer_stats.items()
         }
         append_to_dict(metrics, replay_buffer_stats)
+        if self.demo_buffer is not None or self.f1_online_admission is not None:
+            append_to_dict(metrics, self.buffer_dataset.sample_metrics())
+        if self.f1_online_admission is not None:
+            f1_metrics = self.f1_online_admission.metrics()
+            if self.f1_demo_admission is not None:
+                demo_rejected = self.f1_demo_admission.metrics()[
+                    "replay/quarantine_rejected"
+                ]
+                f1_metrics["replay/quarantine_rejected"] += demo_rejected
+            append_to_dict(metrics, f1_metrics)
 
         if self.demo_buffer is not None:
             demo_buffer_stats = self.demo_buffer.get_stats()

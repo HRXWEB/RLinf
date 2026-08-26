@@ -12,12 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from rlinf.envs.realworld.gim_arm.tasks.peg_insertion import (
-    GimArmPegInsertionEnv as GimArmPegInsertionEnv,
-)
-from rlinf.envs.realworld.registration import register_legacy_task
+"""F1 task environments and Gymnasium registration."""
 
-register_legacy_task(
-    "GimArmPegInsertionEnv-v1",
-    "rlinf.envs.realworld.gim_arm.tasks:GimArmPegInsertionEnv",
+from rlinf.envs.realworld.registration import register_exact
+
+from .peg_insertion_env import (
+    DualArmPegInsertionConfig,
+    DualArmPegInsertionEnv,
 )
+
+_ENV_ID = "F1DualArmPegInsertionEnv-v1"
+_ENTRY_POINT = "rlinf.envs.realworld.f1.tasks:DualArmPegInsertionEnv"
+
+
+register_exact(
+    _ENV_ID,
+    _ENTRY_POINT,
+    allowed_entry_points=frozenset({_ENTRY_POINT}),
+)
+
+__all__ = ["DualArmPegInsertionConfig", "DualArmPegInsertionEnv"]

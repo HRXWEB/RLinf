@@ -18,6 +18,8 @@ connect RLinf to physical hardware.
      - Split inference and training across cloud and edge.
    * - :doc:`Real-World Robots <../realworld_robot>`
      - Run RL on physical robot hardware.
+   * - :doc:`F1 Two-Node Runtime <../f1_runtime>`
+     - Reproduce the GPU-host and ARM64 Thor environments for F1.
 
 .. toctree::
    :hidden:
@@ -26,3 +28,4 @@ connect RLinf to physical hardware.
    Heterogeneous Clusters <../hetero>
    Cloud-Edge Collaboration <../cloud_edge>
    Real-World Robots <../realworld_robot>
+   F1 Two-Node Runtime <../f1_runtime>

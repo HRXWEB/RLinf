@@ -1089,6 +1089,7 @@ class EnvWorker(Worker):
                         truncations=env_output.truncations,
                         terminations=env_output.terminations,
                         rewards=rewards,
+                        env_infos=env_output.env_infos,
                     )
 
                     self.rollout_results[stage_id].append_step_result(chunk_step_result)
@@ -1202,6 +1203,7 @@ class EnvWorker(Worker):
                     truncations=env_output.truncations,
                     terminations=env_output.terminations,
                     rewards=rewards,
+                    env_infos=env_output.env_infos,
                 )
                 self.rollout_results[stage_id].append_step_result(chunk_step_result)
                 if (

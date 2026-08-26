@@ -1,0 +1,9 @@
+{
+  "api_contract_path": "docs/api-contract-0.1.1.md",
+  "package_version": "0.1.1",
+  "python_version": "3.12.13",
+  "release_commit": "0783e2f68149e43c6063d10fc283a01580d0ef31",
+  "repository_url": "ssh://git@192.168.121.142:2222/stridingai/algorithm/robots/hq-f1/f1-robot-controller.git",
+  "wheel_path": "dist/f1_robot_controller-0.1.1-py3-none-any.whl",
+  "wheel_sha256": "6f118fcce3b6e415bc61f573122b28b1ef0dbb56adbee4e03eebb89333af7a5b"
+}

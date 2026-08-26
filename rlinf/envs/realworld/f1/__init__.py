@@ -12,12 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from rlinf.envs.realworld.gim_arm.tasks.peg_insertion import (
-    GimArmPegInsertionEnv as GimArmPegInsertionEnv,
-)
-from rlinf.envs.realworld.registration import register_legacy_task
+"""F1 real-world robot environment."""
 
-register_legacy_task(
-    "GimArmPegInsertionEnv-v1",
-    "rlinf.envs.realworld.gim_arm.tasks:GimArmPegInsertionEnv",
-)
+from .f1_robot_env import F1_STATE_ORDER, F1RobotConfig, F1RobotEnv
+
+__all__ = ["F1_STATE_ORDER", "F1RobotConfig", "F1RobotEnv"]

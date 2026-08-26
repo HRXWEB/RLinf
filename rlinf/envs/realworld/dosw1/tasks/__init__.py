@@ -17,10 +17,10 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 import gymnasium as gym
-from gymnasium.envs.registration import register
 
 from rlinf.envs.realworld.common.wrappers import LeaderFollowerKeyboardIntervention
 from rlinf.envs.realworld.dosw1.tasks.pick import PickEnv as PickEnv
+from rlinf.envs.realworld.registration import register_legacy_task
 
 
 def _maybe_apply_keyboard_intervention(
@@ -51,9 +51,9 @@ def create_dosw1_pick_env(
     return _maybe_apply_keyboard_intervention(env, env_cfg)
 
 
-register(
-    id="DOSW1PickEnv-v1",
-    entry_point="rlinf.envs.realworld.dosw1.tasks:create_dosw1_pick_env",
+register_legacy_task(
+    "DOSW1PickEnv-v1",
+    "rlinf.envs.realworld.dosw1.tasks:create_dosw1_pick_env",
 )
 
 __all__ = ["PickEnv", "create_dosw1_pick_env"]
