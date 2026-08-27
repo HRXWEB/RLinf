@@ -451,6 +451,35 @@ using LIBERO-10 as an example.
    * - ``task_suite_name``
      - Task suite (``libero_10`` for the 10-task benchmark).
 
+**Real-World Task Registration**
+
+.. code:: yaml
+
+  env_type: realworld
+  init_params:
+    id: PegInsertionEnv-v1
+    registration_module: rlinf.envs.realworld.franka.tasks
+
+.. list-table::
+   :header-rows: 1
+   :widths: 32 68
+
+   * - Parameter
+     - Description
+   * - ``init_params.id``
+     - Gym task ID passed to ``gym.make()``.
+   * - ``init_params.registration_module``
+     - Required for ``env_type: realworld``. Set it to the Python module that
+       registers the selected Gym task before ``RealWorldEnv`` calls
+       ``gym.make()``. Franka tasks use ``rlinf.envs.realworld.franka.tasks``,
+       XSquare Turtle2 button tasks use ``rlinf.envs.realworld.xsquare.tasks``,
+       and DOS-W1 pick tasks use ``rlinf.envs.realworld.dosw1.tasks``.
+
+.. warning::
+
+   Importing ``rlinf.envs.realworld`` no longer registers every real-world task.
+   If you call ``gym.make()`` directly, import the selected task module first.
+
 **Reward Configuration**
 
 .. code:: yaml

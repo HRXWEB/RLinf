@@ -93,8 +93,14 @@ YAML 配置
 配置前请根据实际硬件修改：
 
 - 任务目标位姿：``robot_ip`` 、``target_ee_pose``
+- 真机任务注册模块：``env.train.init_params.registration_module`` /
+  ``env.eval.init_params.registration_module``
 - 预训练模型路径：``actor.model.model_path``
 - 离线 demo 数据（RLPD 等）：``algorithm.demo_buffer`` 、``data.path``
+
+Franka 任务 ID 使用 ``rlinf.envs.realworld.franka.tasks``，XSquare Turtle2
+按键任务使用 ``rlinf.envs.realworld.xsquare.tasks``，DOS-W1 抓取任务使用
+``rlinf.envs.realworld.dosw1.tasks``。
 
 单机器人（1 GPU + 1 机械臂）
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -263,6 +269,9 @@ YAML 配置
 
 此模式下，所设置的每个变量都必须提供与 ``ROBOT_IP`` 相同数量的逗号分隔取值；数量不一致会使枚举报错并中止。
 其他机器人类型使用各自的标识字段（``GimArm`` → ``CAN_INTERFACE`` 、``DOSW1`` → ``ROBOT_URL``）。
+
+新增真机任务时，请把 Gym 注册保留在任务自己的模块中，并在 env 预设中设置
+``init_params.registration_module``。仅导入 ``rlinf.envs.realworld`` 不会注册全部机器人栈。
 
 
 启动真机训练

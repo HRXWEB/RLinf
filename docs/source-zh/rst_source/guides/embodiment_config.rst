@@ -437,6 +437,35 @@ actor
    * - ``task_suite_name``
      - 任务套件（``libero_10`` 表示 10 任务基准）。
 
+**真机任务注册**
+
+.. code:: yaml
+
+  env_type: realworld
+  init_params:
+    id: PegInsertionEnv-v1
+    registration_module: rlinf.envs.realworld.franka.tasks
+
+.. list-table::
+   :header-rows: 1
+   :widths: 32 68
+
+   * - 参数
+     - 说明
+   * - ``init_params.id``
+     - 传给 ``gym.make()`` 的 Gym 任务 ID。
+   * - ``init_params.registration_module``
+     - ``env_type: realworld`` 必填。将它设为注册所选 Gym 任务的 Python 模块，
+       ``RealWorldEnv`` 会在调用 ``gym.make()`` 前导入该模块。Franka 任务使用
+       ``rlinf.envs.realworld.franka.tasks``，XSquare Turtle2 按键任务使用
+       ``rlinf.envs.realworld.xsquare.tasks``，DOS-W1 抓取任务使用
+       ``rlinf.envs.realworld.dosw1.tasks``。
+
+.. warning::
+
+   仅导入 ``rlinf.envs.realworld`` 不再注册全部真机任务。如果你直接调用
+   ``gym.make()``，请先导入所选任务模块。
+
 **奖励配置**
 
 .. code:: yaml

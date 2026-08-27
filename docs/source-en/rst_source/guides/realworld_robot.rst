@@ -97,8 +97,15 @@ those resources.
 Before running, update:
 
 - ``robot_ip``, ``target_ee_pose`` (task goal pose)
+- ``env.train.init_params.registration_module`` /
+  ``env.eval.init_params.registration_module`` (the module that registers the
+  selected Gym task)
 - ``actor.model.model_path`` (pretrained ResNet, etc.)
 - ``algorithm.demo_buffer`` / ``data.path`` (for RLPD and other demo-based algorithms)
+
+Use ``rlinf.envs.realworld.franka.tasks`` for Franka task IDs,
+``rlinf.envs.realworld.xsquare.tasks`` for XSquare Turtle2 button tasks, and
+``rlinf.envs.realworld.dosw1.tasks`` for DOS-W1 pick tasks.
 
 Single robot (1 GPU + 1 arm)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -280,6 +287,10 @@ In this mode every variable you set must provide the same number of
 comma-separated values as ``ROBOT_IP``; a mismatch aborts enumeration with an
 explicit error. Other robot types use their own identifier field
 (``GimArm`` → ``CAN_INTERFACE``, ``DOSW1`` → ``ROBOT_URL``).
+
+When you add a new real-world task, keep its Gym registration local to the task
+module and set ``init_params.registration_module`` in the env preset. Importing
+``rlinf.envs.realworld`` alone does not register every robot stack.
 
 
 Launch real-world training
