@@ -24,7 +24,6 @@ from typing import Any
 import gymnasium as gym
 import numpy as np
 import pytest
-import torch
 from f1_robot_controller import (
     CommandReceipt,
     CommandStatus,
@@ -38,9 +37,6 @@ from f1_robot_controller import (
     ObservationUnavailableError,
     SensorTimestamps,
 )
-
-from rlinf.data.embodied_io_struct import Trajectory
-from rlinf.data.f1_replay_admission import F1ReplayAdmission
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
@@ -148,7 +144,6 @@ def _f1_config(**overrides: object) -> F1RobotConfig:
     overrides.pop("architecture_smoke", None)
     overrides.pop("phase2_handoff", None)
     overrides.pop("command_capability", None)
-    overrides.pop("f1_replay_manifest", None)
     return F1RobotConfig(
         controller=_fake_controller_config(**controller_overrides),
         action_scale=_action_scale(),
@@ -992,37 +987,6 @@ def test_boundary_policy_action_is_submitted_unchanged_for_controller_rejection(
         assert command.left_gripper_target == pytest.approx(100.5)
         assert env._num_steps == 0
         assert controller.stop_reasons
-    finally:
-        env.close()
-
-
-def test_step_emits_env_origin_f1_replay_descriptor_metadata(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    controller = RecordingController()
-    _install_recording_controller(monkeypatch, controller)
-    env = F1RobotEnv(_f1_config())
-    try:
-        step_result = env.step(np.zeros(14, dtype=np.float32))
-        info = step_result[4]
-        trajectory = Trajectory(
-            actions=torch.zeros((1, 1, 14)),
-            rewards=torch.zeros((1, 1, 1)),
-            f1_manifest=info["f1_manifest"],
-            f1_transitions=info["f1_transitions"],
-        )
-
-        accepted = F1ReplayAdmission.from_config(
-            enabled=True,
-            descriptor=info["f1_manifest"],
-        ).admit_online([trajectory])
-
-        assert accepted == [trajectory]
-        assert info["f1_manifest"]["schema_version"] == "f1-replay-descriptor-v1"
-        assert info["f1_manifest"]["source_type"] == "online"
-        assert info["f1_transitions"][0]["step_index"] == 1
-        assert info["f1_transitions"][0]["fault"] is None
-        assert info["f1_transitions"][0]["safety_abort"] is False
     finally:
         env.close()
 

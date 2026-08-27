@@ -220,111 +220,6 @@ def _load_async_sac_actor_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     return module
 
 
-def _load_sac_actor_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    """Load SAC descriptor construction without initializing FSDP."""
-
-    _stub_module(
-        monkeypatch,
-        "rlinf.workers.actor.fsdp_actor_worker",
-        EmbodiedFSDPActor=object,
-    )
-    module_path = ROOT / "rlinf" / "workers" / "actor" / "fsdp_sac_policy_worker.py"
-    spec = importlib.util.spec_from_file_location(
-        "_f1_sac_actor_under_test",
-        module_path,
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _load_async_runner_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    """Load the real runner inheritance chain without Ray/logger dependencies."""
-
-    _stub_module(
-        monkeypatch,
-        "rlinf.scheduler",
-        Channel=object,
-        WorkerGroupFuncResult=object,
-    )
-    _stub_module(monkeypatch, "rlinf.utils.distributed", ScopedTimer=object)
-    _stub_module(monkeypatch, "rlinf.utils.logging", get_logger=lambda: None)
-    _stub_module(monkeypatch, "rlinf.utils.metric_logger", MetricLogger=object)
-    _stub_module(
-        monkeypatch,
-        "rlinf.utils.metric_utils",
-        compute_evaluate_metrics=lambda results: results,
-        print_metrics_table=lambda *_args, **_kwargs: None,
-    )
-    _stub_module(
-        monkeypatch,
-        "rlinf.utils.runner_utils",
-        check_progress=lambda *_args, **_kwargs: (False,) * 3,
-    )
-    _stub_module(monkeypatch, "rlinf.utils.timers", Timer=object)
-    base_path = ROOT / "rlinf" / "runners" / "embodied_runner.py"
-    base_spec = importlib.util.spec_from_file_location(
-        "_f1_embodied_runner_under_test",
-        base_path,
-    )
-    assert base_spec is not None and base_spec.loader is not None
-    base_module = importlib.util.module_from_spec(base_spec)
-    base_spec.loader.exec_module(base_module)
-    monkeypatch.setitem(sys.modules, "rlinf.runners.embodied_runner", base_module)
-
-    module_path = ROOT / "rlinf" / "runners" / "async_embodied_runner.py"
-    spec = importlib.util.spec_from_file_location(
-        "_f1_async_runner_under_test",
-        module_path,
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-class _SyncHandle:
-    """Controllable stand-in for the external worker-group handle boundary."""
-
-    def __init__(self, *, done: bool = True, wait_error: Exception | None = None):
-        self.is_done = done
-        self.wait_error = wait_error
-        self.wait_calls = 0
-
-    def done(self) -> bool:
-        return self.is_done
-
-    def wait(self) -> None:
-        self.wait_calls += 1
-        if self.wait_error is not None:
-            raise self.wait_error
-
-
-class _SyncRollout:
-    def __init__(self, handle: _SyncHandle) -> None:
-        self.handle = handle
-        self.request_calls = 0
-
-    def sync_model_from_actor(self) -> _SyncHandle:
-        self.request_calls += 1
-        return self.handle
-
-    def request_actor_sync_model(self) -> _SyncHandle:
-        self.request_calls += 1
-        return self.handle
-
-
-class _SyncActor:
-    def __init__(self, handle: _SyncHandle) -> None:
-        self.handle = handle
-        self.request_calls = 0
-
-    def sync_model_to_rollout(self) -> _SyncHandle:
-        self.request_calls += 1
-        return self.handle
-
-
 @pytest.fixture
 def configured_f1_env(
     monkeypatch: pytest.MonkeyPatch,
@@ -547,28 +442,6 @@ def test_async_worker_fault_never_sends_or_admits_the_partial_trajectory(
     assert replay_admissions == []
 
 
-def test_actor_builds_f1_replay_descriptor_from_hydra_action_scale(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Catch Hydra DictConfig leaking into the strict JSON descriptor schema."""
-
-    monkeypatch.setenv("EMBODIED_PATH", str(ROOT / "examples" / "embodiment"))
-    with initialize_config_dir(config_dir=str(CONFIG_ROOT)):
-        cfg = compose(config_name=CONFIG_NAME)
-
-    actor_module = _load_sac_actor_module(monkeypatch)
-    actor = object.__new__(actor_module.EmbodiedSACFSDPPolicy)
-    actor.cfg = cfg
-
-    descriptor = actor._build_f1_replay_descriptor("online")
-
-    assert descriptor["action_scale"] == {
-        "tcp_position_m": 0.005,
-        "tcp_orientation_deg": 1.0,
-        "gripper_percent_closed": 10.0,
-    }
-
-
 def test_dummy_config_accepts_negative_tcp_z_from_the_fake_origin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -624,7 +497,9 @@ def test_gpu_e2e_config_freezes_the_two_step_f1_sac_gate(
     assert cfg.algorithm.entropy_tuning.target_entropy == -14
     assert cfg.env.train.init_params.id == ENV_ID
     assert cfg.env.train.action_dim == 14
-    assert cfg.env.train.action_schema == "f1-normalized-action-v1"
+    assert cfg.env.train.init_params.registration_module == (
+        "rlinf.envs.realworld.f1.tasks"
+    )
     assert cfg.env.train.max_episode_steps == 10
     assert cfg.env.train.max_steps_per_rollout_epoch == 10
     assert cfg.env.train.override_cfg.controller.backend == "fake"
@@ -639,7 +514,9 @@ def test_gpu_e2e_config_freezes_the_two_step_f1_sac_gate(
         0.0,
         100.0,
     ]
-    assert cfg.env.eval.action_schema == "f1-normalized-action-v1"
+    assert cfg.env.eval.init_params.registration_module == (
+        "rlinf.envs.realworld.f1.tasks"
+    )
     assert cfg.env.eval.max_episode_steps == 10
     assert cfg.env.eval.max_steps_per_rollout_epoch == 10
     assert cfg.env.eval.override_cfg.controller.backend == "fake"
@@ -651,92 +528,3 @@ def test_gpu_e2e_config_freezes_the_two_step_f1_sac_gate(
     assert "F1_" not in serialized
     assert "is_dummy" not in serialized
     assert "architecture_smoke" not in serialized
-
-
-def test_weight_sync_wait_failures_never_increment_success(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Catch a failed or unfinished weight sync being reported as successful."""
-
-    module = _load_async_runner_module(monkeypatch)
-    runner = module.AsyncEmbodiedRunner.__new__(module.AsyncEmbodiedRunner)
-    runner._weight_sync_success_total = 0
-    runner._pending_rollout_weight_sync = None
-    runner.logger = SimpleNamespace(info=lambda _message: None)
-    actor_handle = _SyncHandle(wait_error=RuntimeError("actor wait failed"))
-    rollout_handle = _SyncHandle()
-    runner.actor = _SyncActor(actor_handle)
-    runner.rollout = _SyncRollout(rollout_handle)
-
-    with pytest.raises(RuntimeError, match="actor wait failed"):
-        runner.update_rollout_weights(no_wait=False)
-    assert runner._weight_sync_success_total == 0
-    assert actor_handle.wait_calls == 1
-    assert rollout_handle.wait_calls == 0
-
-    pending_rollout = _SyncHandle()
-    pending_actor = _SyncHandle(wait_error=RuntimeError("pending wait failed"))
-    runner._pending_rollout_weight_sync = (pending_rollout, pending_actor)
-    with pytest.raises(RuntimeError, match="pending wait failed"):
-        runner._cleanup_pending_rollout_weight_sync(no_wait=False)
-    assert runner._weight_sync_success_total == 0
-    assert runner._pending_rollout_weight_sync == (pending_rollout, pending_actor)
-
-
-def test_unfinished_weight_sync_is_coalesced_without_a_false_success(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Catch a pending no-wait sync being replaced or counted prematurely."""
-
-    module = _load_async_runner_module(monkeypatch)
-    runner = module.AsyncEmbodiedRunner.__new__(module.AsyncEmbodiedRunner)
-    pending_rollout = _SyncHandle(done=False)
-    pending_actor = _SyncHandle(done=True)
-    runner._pending_rollout_weight_sync = (pending_rollout, pending_actor)
-    runner._weight_sync_request_total = 0
-    runner._weight_sync_coalesced_total = 0
-    runner._weight_sync_success_total = 0
-    runner.logger = SimpleNamespace(info=lambda _message: None)
-    new_rollout = _SyncRollout(_SyncHandle())
-    new_actor = _SyncActor(_SyncHandle())
-    runner.rollout = new_rollout
-    runner.actor = new_actor
-
-    runner.update_rollout_weights(no_wait=True)
-
-    assert runner._weight_sync_request_total == 1
-    assert runner._weight_sync_coalesced_total == 1
-    assert runner._weight_sync_success_total == 0
-    assert runner._pending_rollout_weight_sync == (pending_rollout, pending_actor)
-    assert pending_rollout.wait_calls == 0
-    assert pending_actor.wait_calls == 0
-    assert new_rollout.request_calls == 0
-    assert new_actor.request_calls == 0
-
-
-def test_successful_weight_syncs_publish_a_monotonic_metric_sequence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Catch successful syncs being omitted from per-step training metrics."""
-
-    module = _load_async_runner_module(monkeypatch)
-    runner = module.AsyncEmbodiedRunner.__new__(module.AsyncEmbodiedRunner)
-    runner._weight_sync_success_total = 0
-    runner._pending_rollout_weight_sync = None
-    runner.logger = SimpleNamespace(info=lambda _message: None)
-    runner.actor = _SyncActor(_SyncHandle())
-    runner.rollout = _SyncRollout(_SyncHandle())
-
-    observed_metrics = []
-    for _step in range(2):
-        runner.update_rollout_weights(no_wait=False)
-        observed_metrics.append(runner._weight_sync_metrics())
-    runner._pending_rollout_weight_sync = (_SyncHandle(), _SyncHandle())
-    assert runner._cleanup_pending_rollout_weight_sync(no_wait=True) is True
-    observed_metrics.append(runner._weight_sync_metrics())
-
-    assert observed_metrics == [
-        {"train/weight_sync_success_total": 1},
-        {"train/weight_sync_success_total": 2},
-        {"train/weight_sync_success_total": 3},
-    ]

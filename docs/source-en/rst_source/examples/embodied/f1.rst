@@ -67,8 +67,8 @@ Observation and Action
      - Reward
      - Prompt
    * - Three RGB streams: ``head_color``, ``left_wrist_color``, ``right_wrist_color``; 16D arm/gripper state
-     - 14D normalized ``f1-normalized-action-v1`` action in ``[-1, 1]``. The Env records normalized action, physical delta, and absolute target in replay audit fields.
-     - Task reward and success signal returned by ``F1DualArmPegInsertionEnv-v1``. Controller faults stop motion and do not admit a fabricated transition.
+     - 14D normalized action in ``[-1, 1]``. The Env maps it to left/right TCP deltas and gripper targets.
+     - Task reward and success signal returned by ``F1DualArmPegInsertionEnv-v1``. Controller faults stop motion and reject the step.
      - ``Use both arms cooperatively to insert the peg into the matching hole.``
 
 Architecture and Node Roles
@@ -255,22 +255,15 @@ On the robot-side ARM64 node (validated on NVIDIA Thor):
 Prepare Demonstrations for RLPD
 -------------------------------
 
-The default F1 configuration enables RLPD with ``algorithm.demo_fraction: 0.4``.
-Before starting it, set ``algorithm.demo_buffer.load_path`` to a non-empty F1
-demonstration dataset whose replay descriptor matches the configured
-observation, action, and action-scale schema. Validate the dataset first:
+The F1 RLPD configuration requires a non-empty demonstration buffer. Set
+``algorithm.demo_buffer.load_path`` to an RLinf replay buffer collected for the
+same task, with the same observation and 14-dimensional action shapes.
+
+To train with online SAC only, remove the demo-buffer mapping:
 
 .. code-block:: bash
 
-   python toolkits/f1/validate_f1_dataset.py \
-     --dataset /path/to/f1-peg-demo-buffer
-
-To train with online SAC only, remove the demo-buffer mapping and set its sample
-fraction to zero:
-
-.. code-block:: bash
-
-   '~algorithm.demo_buffer' algorithm.demo_fraction=0.0
+   '~algorithm.demo_buffer'
 
 Run It
 ------
@@ -291,8 +284,7 @@ For online SAC without demonstrations, append:
 
 .. code-block:: bash
 
-   '~algorithm.demo_buffer' \
-   algorithm.demo_fraction=0.0
+   '~algorithm.demo_buffer'
 
 What this does: ActorGroup and RolloutGroup run on the ``gpu`` node group;
 EnvGroup runs on the ``f1`` node group through ``/opt/rlinf-venv/bin/python``.
@@ -314,8 +306,6 @@ Inspect logs and replay before repeating a real run.
    * - ``./logs/f1-peg-rlpd``
      - Open TensorBoard and inspect SAC losses, replay counts, and timing. See :doc:`Training Metrics </rst_source/reference/metrics>`.
    * - ``./logs/f1-peg-rlpd/online-replay``
-     - Validate saved replay with ``python toolkits/f1/validate_f1_dataset.py --dataset ./logs/f1-peg-rlpd/online-replay``.
-   * - Replay audit fields
-     - Confirm normalized action, physical delta, absolute target, timestamps, reward, and ``truncated`` match the run.
+     - Confirm that the online replay buffer is written and its sample count grows with collection.
    * - Safety stop
      - Stop the runner with ``Ctrl+C``, then run ``ray stop`` on both nodes. If a Controller fault appears, stop robot motion first and discard the incomplete trajectory.

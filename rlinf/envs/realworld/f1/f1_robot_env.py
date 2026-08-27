@@ -39,11 +39,6 @@ from f1_robot_controller import (
     validate_motion_envelope,
 )
 
-from rlinf.data.embodied.f1_schema import (
-    F1_TRANSITION_SCHEMA_VERSION,
-    build_f1_replay_descriptor,
-)
-
 F1_STATE_ORDER = (
     "left_joint_position",
     "left_gripper",
@@ -456,115 +451,6 @@ class F1RobotEnv(gym.Env):
         )
 
     @staticmethod
-    def _source_timestamp_ns(observation: RobotObservation, source: str) -> int:
-        timestamp_s = observation.timestamps.source_timestamp_s[source]
-        return int(round(float(timestamp_s) * 1_000_000_000))
-
-    @classmethod
-    def _transition_observation_record(
-        cls,
-        observation: RobotObservation,
-        policy_observation: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        images = {
-            "head_color": observation.head_color_rgb,
-            "left_wrist_color": observation.left_wrist_color_rgb,
-            "right_wrist_color": observation.right_wrist_color_rgb,
-        }
-        state = policy_observation["state"]
-        return {
-            "state": [
-                *np.asarray(state["left_joint_position"], dtype=np.float64).tolist(),
-                float(state["left_gripper"][0]),
-                *np.asarray(state["right_joint_position"], dtype=np.float64).tolist(),
-                float(state["right_gripper"][0]),
-            ],
-            "images": {
-                role: {
-                    "shape": list(image.shape),
-                    "dtype": str(image.dtype),
-                    "timestamp_ns": cls._source_timestamp_ns(observation, role),
-                }
-                for role, image in images.items()
-            },
-            "timestamp_ns": min(
-                cls._source_timestamp_ns(observation, role) for role in images
-            ),
-        }
-
-    def _f1_transition_info(
-        self,
-        *,
-        measured_before: RobotObservation,
-        policy_observation_before: Mapping[str, Any],
-        policy_action: np.ndarray,
-        physical_delta: np.ndarray,
-        command: DualArmTcpCommand,
-        reward: float,
-        terminated: bool,
-        truncated: bool,
-    ) -> dict[str, Any]:
-        descriptor = build_f1_replay_descriptor(
-            task_id="F1DualArmPegInsertionEnv-v1",
-            action_scale=self.config.action_scale,
-            control_period_s=self.config.control_period_s,
-            source_type="online",
-        )
-        action_ns = int(round(command.created_at_monotonic_s * 1_000_000_000))
-        transition = {
-            "schema_version": F1_TRANSITION_SCHEMA_VERSION,
-            "episode_id": str(self._session_id),
-            "step_index": self._num_steps,
-            "source_type": "online",
-            "observation": self._transition_observation_record(
-                measured_before,
-                policy_observation_before,
-            ),
-            "action": policy_action.astype(float).tolist(),
-            "physical_delta_commanded": physical_delta.astype(float).tolist(),
-            "absolute_target_commanded": {
-                "left_arm": {
-                    "tcp_pose": {
-                        "position_m": np.asarray(command.left_tcp_target_m_deg[:3])
-                        .astype(float)
-                        .tolist(),
-                        "orientation_deg": np.asarray(command.left_tcp_target_m_deg[3:])
-                        .astype(float)
-                        .tolist(),
-                    },
-                    "gripper_percent_closed": float(command.left_gripper_target),
-                },
-                "right_arm": {
-                    "tcp_pose": {
-                        "position_m": np.asarray(command.right_tcp_target_m_deg[:3])
-                        .astype(float)
-                        .tolist(),
-                        "orientation_deg": np.asarray(
-                            command.right_tcp_target_m_deg[3:]
-                        )
-                        .astype(float)
-                        .tolist(),
-                    },
-                    "gripper_percent_closed": float(command.right_gripper_target),
-                },
-            },
-            "reward": float(reward),
-            "terminated": bool(terminated),
-            "truncated": bool(truncated),
-            "timestamps": {
-                "observation_ns": self._transition_observation_record(
-                    measured_before,
-                    policy_observation_before,
-                )["timestamp_ns"],
-                "action_ns": action_ns,
-                "reward_ns": action_ns,
-            },
-            "fault": None,
-            "safety_abort": False,
-        }
-        return {"f1_manifest": descriptor, "f1_transitions": [transition]}
-
-    @staticmethod
     def _validated_action(action: np.ndarray) -> np.ndarray:
         try:
             policy_action = np.array(action, dtype=np.float32, copy=True)
@@ -893,7 +779,6 @@ class F1RobotEnv(gym.Env):
             policy_action = self._validated_action(action)
             if not self.action_space.contains(policy_action):
                 raise ValueError("action must stay within normalized [-1, 1] bounds")
-            policy_observation_before = self._policy_observation(measured_before)
             command = self._absolute_command(policy_action, measured_before)
         except BaseException as error:
             self._stop_after_failure("policy setup", error)
@@ -973,18 +858,6 @@ class F1RobotEnv(gym.Env):
             "command_accepted_at_monotonic_s": receipt.accepted_at_monotonic_s,
             "command_expires_at_monotonic_s": receipt.expires_at_monotonic_s,
         }
-        info.update(
-            self._f1_transition_info(
-                measured_before=measured_before,
-                policy_observation_before=policy_observation_before,
-                policy_action=policy_action,
-                physical_delta=info["physical_delta_commanded"],
-                command=command,
-                reward=reward,
-                terminated=terminated,
-                truncated=truncated,
-            )
-        )
         return observation, reward, terminated, truncated, info
 
     def close(self) -> None:

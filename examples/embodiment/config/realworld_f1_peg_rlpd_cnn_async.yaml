@@ -69,8 +69,6 @@ algorithm:
   gamma: 0.8
   tau: 0.01
   initial_random_steps: 0
-  demo_fraction: 0.4
-
   entropy_tuning:
     alpha_type: softplus
     initial_alpha: 0.01
@@ -96,9 +94,6 @@ algorithm:
     load_path: ./data/f1-peg-demo-buffer
     auto_save: false
 
-  f1_replay:
-    enabled: true
-
   target_update_freq: 1
 
 env:
@@ -107,7 +102,6 @@ env:
   train:
     auto_reset: false
     action_dim: 14
-    action_schema: f1-normalized-action-v1
     rollout_epoch: 1
     total_num_envs: 1
     max_episode_steps: 10
@@ -205,7 +199,6 @@ env:
   eval:
     auto_reset: false
     action_dim: 14
-    action_schema: f1-normalized-action-v1
     rollout_epoch: 0
     total_num_envs: 0
     max_episode_steps: 10

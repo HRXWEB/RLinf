@@ -105,7 +105,6 @@ def test_f1_config_is_complete_without_artifact_paths() -> None:
         "architecture_smoke",
         "phase2_handoff",
         "command_capability",
-        "f1_replay_manifest",
     ],
 )
 def test_f1_config_rejects_removed_fields(legacy_field: str) -> None:

@@ -197,4 +197,6 @@ def test_real_training_config_enters_bounded_policy_step(
     assert cfg.env.train.init_params.id == "F1DualArmPegInsertionEnv-v1"
     assert cfg.env.train.max_episode_steps == 10
     assert cfg.algorithm.loss_type == "embodied_sac"
-    assert cfg.algorithm.f1_replay.enabled is True
+    assert cfg.env.train.init_params.registration_module == (
+        "rlinf.envs.realworld.f1.tasks"
+    )

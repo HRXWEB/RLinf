@@ -14,7 +14,7 @@
 
 """F1 task environments and Gymnasium registration."""
 
-from rlinf.envs.realworld.registration import register_exact
+from gymnasium.envs.registration import register, registry
 
 from .peg_insertion_env import (
     DualArmPegInsertionConfig,
@@ -22,13 +22,11 @@ from .peg_insertion_env import (
 )
 
 _ENV_ID = "F1DualArmPegInsertionEnv-v1"
-_ENTRY_POINT = "rlinf.envs.realworld.f1.tasks:DualArmPegInsertionEnv"
 
-
-register_exact(
-    _ENV_ID,
-    _ENTRY_POINT,
-    allowed_entry_points=frozenset({_ENTRY_POINT}),
-)
+if _ENV_ID not in registry:
+    register(
+        id=_ENV_ID,
+        entry_point="rlinf.envs.realworld.f1.tasks:DualArmPegInsertionEnv",
+    )
 
 __all__ = ["DualArmPegInsertionConfig", "DualArmPegInsertionEnv"]

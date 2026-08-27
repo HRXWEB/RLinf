@@ -15,7 +15,6 @@
 import queue
 import threading
 import time
-from math import floor
 from typing import Any, Iterator, Optional
 
 import torch
@@ -33,7 +32,8 @@ class ReplayBufferDataset(IterableDataset):
 
     This dataset provides an infinite iterator that yields batches sampled from
     a replay buffer and optionally a demonstration buffer. When both buffers are
-    provided, batches use a configurable deterministic demonstration fraction.
+    provided, batches are composed of half replay samples and half demonstration
+    samples.
 
     Attributes:
         replay_buffer: Buffer storing online rollout trajectories.
@@ -53,7 +53,6 @@ class ReplayBufferDataset(IterableDataset):
         batch_size: int,
         min_replay_buffer_size: int,
         min_demo_buffer_size: int,
-        demo_fraction: float = 0.5,
         **kwargs: Any,
     ) -> None:
         """Initializes the ReplayBufferDataset.
@@ -63,8 +62,7 @@ class ReplayBufferDataset(IterableDataset):
             demo_buffer: Optional buffer storing demonstration trajectories.
                 If None, only replay buffer is used.
             batch_size: Total number of samples per batch. When demo_buffer is
-                provided, ``round(batch_size * demo_fraction)`` samples come
-                from the demo buffer and the remainder from replay.
+                provided, batch_size // 2 samples come from each buffer.
             min_replay_buffer_size: Minimum number of samples required in replay
                 buffer before sampling begins.
             min_demo_buffer_size: Minimum number of samples required in demo
@@ -77,37 +75,6 @@ class ReplayBufferDataset(IterableDataset):
         self.min_demo_buffer_size = min_demo_buffer_size
 
         self.batch_size = batch_size
-        self.demo_fraction = _validate_demo_fraction(demo_fraction)
-        self.last_online_samples = batch_size
-        self.last_demo_samples = 0
-
-    def _sample_ready_batch(self) -> dict[str, torch.Tensor]:
-        if self.demo_buffer is not None:
-            online_size, demo_size = _split_online_demo_batch(
-                self.batch_size, self.demo_fraction
-            )
-            self.last_online_samples = online_size
-            self.last_demo_samples = demo_size
-            if demo_size == 0:
-                return self.replay_buffer.sample(online_size)
-            if online_size == 0:
-                return self.demo_buffer.sample(demo_size)
-            replay_batch = self.replay_buffer.sample(online_size)
-            demo_batch = self.demo_buffer.sample(demo_size)
-            return concat_batch(replay_batch, demo_batch)
-
-        self.last_online_samples = self.batch_size
-        self.last_demo_samples = 0
-        return self.replay_buffer.sample(self.batch_size)
-
-    def sample_metrics(self) -> dict[str, float]:
-        total = self.last_online_samples + self.last_demo_samples
-        if total <= 0:
-            return {"replay/online_fraction": 0.0, "replay/demo_fraction": 0.0}
-        return {
-            "replay/online_fraction": self.last_online_samples / total,
-            "replay/demo_fraction": self.last_demo_samples / total,
-        }
 
     def __iter__(self) -> Iterator[dict[str, torch.Tensor]]:
         """Returns an infinite iterator that yields batches.
@@ -130,7 +97,13 @@ class ReplayBufferDataset(IterableDataset):
                 is_ready = False
 
             if is_ready:
-                yield self._sample_ready_batch()
+                if self.demo_buffer is not None:
+                    replay_batch = self.replay_buffer.sample(self.batch_size // 2)
+                    demo_batch = self.demo_buffer.sample(self.batch_size // 2)
+                    batch = concat_batch(replay_batch, demo_batch)
+                else:
+                    batch = self.replay_buffer.sample(self.batch_size)
+                yield batch
 
     def close(self) -> None:
         """Releases references to replay and demo buffers."""
@@ -170,7 +143,6 @@ class PreloadReplayBufferDataset(ReplayBufferDataset):
         min_replay_buffer_size: int,
         min_demo_buffer_size: int,
         prefetch_size: int = 5,
-        demo_fraction: float = 0.5,
     ) -> None:
         """Initializes the PreloadReplayBufferDataset.
 
@@ -179,8 +151,7 @@ class PreloadReplayBufferDataset(ReplayBufferDataset):
             demo_buffer: Optional buffer storing demonstration trajectories.
                 If None, only replay buffer is used.
             batch_size: Total number of samples per batch. When demo_buffer is
-                provided, ``round(batch_size * demo_fraction)`` samples come
-                from demo and the remainder from replay.
+                provided, batch_size // 2 samples come from each buffer.
             min_replay_buffer_size: Minimum number of samples required in replay
                 buffer before sampling begins.
             min_demo_buffer_size: Minimum number of samples required in demo
@@ -196,9 +167,6 @@ class PreloadReplayBufferDataset(ReplayBufferDataset):
         self.min_demo_buffer_size = min_demo_buffer_size
 
         self.batch_size = batch_size
-        self.demo_fraction = _validate_demo_fraction(demo_fraction)
-        self.last_online_samples = batch_size
-        self.last_demo_samples = 0
         self.prefetch_size = prefetch_size
         assert self.prefetch_size > 0, f"{self.prefetch_size=} must be greater than 0"
 
@@ -228,7 +196,12 @@ class PreloadReplayBufferDataset(ReplayBufferDataset):
                 is_ready = False
 
             if is_ready:
-                batch = self._sample_ready_batch()
+                if self.demo_buffer is not None:
+                    replay_batch = self.replay_buffer.sample(self.batch_size // 2)
+                    demo_batch = self.demo_buffer.sample(self.batch_size // 2)
+                    batch = concat_batch(replay_batch, demo_batch)
+                else:
+                    batch = self.replay_buffer.sample(self.batch_size)
             else:
                 time.sleep(3)
                 continue
@@ -312,18 +285,3 @@ def replay_buffer_collate_fn(
         The unwrapped batch dictionary.
     """
     return batch[0]
-
-
-def _validate_demo_fraction(demo_fraction: float) -> float:
-    value = float(demo_fraction)
-    if value < 0.0 or value > 1.0:
-        raise ValueError("demo_fraction must be in [0.0, 1.0]")
-    return value
-
-
-def _split_online_demo_batch(batch_size: int, demo_fraction: float) -> tuple[int, int]:
-    if batch_size <= 0:
-        raise ValueError("batch_size must be positive")
-    demo_size = int(floor(batch_size * demo_fraction + 0.5))
-    demo_size = max(0, min(batch_size, demo_size))
-    return batch_size - demo_size, demo_size

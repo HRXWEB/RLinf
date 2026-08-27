@@ -189,20 +189,14 @@ runtime role token。
 --------------
 
 F1 RLPD 配置要求非空 demonstration buffer。将
-``algorithm.demo_buffer.load_path`` 设置为 replay descriptor 与当前 F1
-observation、action 和 action-scale schema 一致的数据集，并在训练前验证：
+``algorithm.demo_buffer.load_path`` 设置为同一任务采集的 RLinf replay buffer，
+并确保 observation 和 14 维 action 的 shape 与当前配置一致。
+
+没有 demonstration 时，删除 demo buffer 以运行 online SAC：
 
 .. code-block:: bash
 
-   python toolkits/f1/validate_f1_dataset.py \
-     --dataset /path/to/f1-peg-demo-buffer
-
-没有 demonstration 时，删除 demo buffer 并把采样比例设为零，以运行 online
-SAC：
-
-.. code-block:: bash
-
-   '~algorithm.demo_buffer' algorithm.demo_fraction=0.0
+   '~algorithm.demo_buffer'
 
 运行训练
 --------
@@ -217,9 +211,8 @@ SAC：
      actor.model.model_path=/path/to/RLinf-ResNet10-pretrained \
      algorithm.demo_buffer.load_path=/path/to/f1-peg-demo-buffer
 
-Online SAC 在命令末尾追加 ``'~algorithm.demo_buffer'`` 和
-``algorithm.demo_fraction=0.0``。RLinf 把有效 transition 写入 online replay，
-仅在配置时采样 demonstration，执行 SAC update，并将 Actor weights 同步到
+Online SAC 在命令末尾追加 ``'~algorithm.demo_buffer'``。RLinf 将 online
+transition 写入 replay buffer，执行 SAC update，并将 Actor weights 同步到
 Rollout。
 
 检查与停止
@@ -235,8 +228,8 @@ Rollout。
      - 真机运行前，在 GPU head 上用 ``ray status`` 确认有两个 live nodes。
    * - Training logs
      - 打开 ``runner.logger.log_path`` 下的 TensorBoard，检查 replay counts、SAC losses 和 timing metrics。
-   * - Replay audit
-     - ``python toolkits/f1/validate_f1_dataset.py --dataset ./logs/f1-peg-rlpd/online-replay``
+   * - Online replay
+     - 确认 ``runner.logger.log_path`` 下的 replay buffer 已写入，并且 sample count 持续增长。
    * - Safety stop
      - 用 ``Ctrl+C`` 停止 runner，在 GPU server 上运行 ``ray stop``，并停止机器人侧 container。如果 Controller 报 fault，先停止 robot motion 再收集 logs。
 
@@ -255,5 +248,5 @@ Rollout。
      - 确认两个节点选择同一个可路由网络上的接口，并且机器人侧 container 使用 host networking。
    * - Controller diagnostics 失败
      - 先修复 ROS 2 discovery、topic names、message types 或 stale sensors，再运行 RLinf。
-   * - Replay validation 失败
-     - 把 trajectory 视为无效，检查 audit fields，并修复 source data 或配置。
+   * - Replay 没有增长
+     - 确认 ``rollout.collect_transitions: true``，检查 EnvGroup 日志，并在下一次真机运行前修复 Controller 错误。

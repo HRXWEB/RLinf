@@ -26,4 +26,5 @@ video_cfg:
 
 init_params:
   id: F1DualArmPegInsertionEnv-v1
+  registration_module: rlinf.envs.realworld.f1.tasks
   num_envs: null

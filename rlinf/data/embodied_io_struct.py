@@ -47,69 +47,6 @@ def get_model_weights_id(versions: torch.Tensor) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, name_bytes.hex()))
 
 
-def _f1_transition_grid(
-    transitions: list[dict[str, Any]] | None,
-    actions: torch.Tensor | None,
-) -> list[list[dict[str, Any]]] | None:
-    """Return step-major F1 metadata as a ``[time][batch]`` grid."""
-
-    if transitions is None:
-        return None
-    if actions is None or actions.ndim < 2:
-        raise ValueError("F1 transitions require [time, batch, ...] actions")
-    trajectory_length, batch_size = actions.shape[:2]
-    if batch_size <= 0 or len(transitions) % batch_size != 0:
-        raise ValueError("F1 transitions must align with the trajectory batch")
-    executed_steps = len(transitions) // batch_size
-    if executed_steps > trajectory_length:
-        raise ValueError("F1 transitions exceed the available trajectory actions")
-    return [
-        transitions[step * batch_size : (step + 1) * batch_size]
-        for step in range(executed_steps)
-    ]
-
-
-def _split_f1_transitions_by_batch(
-    transitions: list[dict[str, Any]] | None,
-    actions: torch.Tensor | None,
-    split_sizes: list[int],
-) -> list[list[dict[str, Any]] | None]:
-    """Split F1 metadata along the same batch axis as trajectory tensors."""
-
-    grid = _f1_transition_grid(transitions, actions)
-    if grid is None:
-        return [None for _ in split_sizes]
-    batch_size = len(grid[0]) if grid else 0
-    if sum(split_sizes) != batch_size:
-        raise ValueError("F1 transition split sizes must cover the action batch")
-    output: list[list[dict[str, Any]]] = [[] for _ in split_sizes]
-    for row in grid:
-        offset = 0
-        for index, size in enumerate(split_sizes):
-            output[index].extend(copy.deepcopy(row[offset : offset + size]))
-            offset += size
-    return output
-
-
-def _select_f1_transitions_by_mask(
-    transitions: list[dict[str, Any]] | None,
-    actions: torch.Tensor | None,
-    mask: torch.Tensor,
-    batch_index: int,
-) -> list[dict[str, Any]] | None:
-    """Select per-step F1 metadata with the intervention sample mask."""
-
-    grid = _f1_transition_grid(transitions, actions)
-    if grid is None:
-        return None
-    selected = [
-        row[batch_index]
-        for step, row in enumerate(grid)
-        if bool(mask[step, batch_index])
-    ]
-    return copy.deepcopy(selected)
-
-
 @dataclass(kw_only=True)
 class EnvOutput:
     """Environment output for a single chunk step."""
@@ -428,7 +365,6 @@ class ChunkStepResult:
     rewards: torch.Tensor = None  # [B, 1]
     forward_inputs: dict[str, torch.Tensor] = field(default_factory=dict)
     versions: torch.Tensor = None  # [B, 1]
-    env_infos: dict[str, Any] | None = None
 
     def __post_init__(self):
         if self.actions is not None:
@@ -449,8 +385,6 @@ class ChunkStepResult:
             self.forward_inputs = put_tensor_device(self.forward_inputs, "cpu")
         if self.versions is not None:
             self.versions = self.versions.cpu().contiguous()
-        if self.env_infos is not None:
-            self.env_infos = put_tensor_device(self.env_infos, "cpu")
 
 
 @dataclass
@@ -474,8 +408,6 @@ class Trajectory:
 
     curr_obs: dict[str, Any] = field(default_factory=dict)
     next_obs: dict[str, Any] = field(default_factory=dict)
-    f1_manifest: dict[str, Any] | None = None
-    f1_transitions: list[dict[str, Any]] | None = None
 
     @staticmethod
     def _generate_field_mask(
@@ -583,13 +515,6 @@ class Trajectory:
                     forward_inputs=forward_inputs,
                     curr_obs=curr_obs,
                     next_obs=next_obs,
-                    f1_manifest=self.f1_manifest,
-                    f1_transitions=_select_f1_transitions_by_mask(
-                        self.f1_transitions,
-                        self.actions,
-                        mask,
-                        i,
-                    ),
                 )
             )
 
@@ -630,35 +555,6 @@ class EmbodiedRolloutResult:
 
     curr_obs: list[dict[str, Any]] = field(default_factory=list)  # trajectory_length
     next_obs: list[dict[str, Any]] = field(default_factory=list)  # trajectory_length
-    f1_manifest: dict[str, Any] | None = None
-    f1_transitions: list[dict[str, Any]] = field(default_factory=list)
-
-    @staticmethod
-    def _active_vector_info_values(
-        env_infos: dict[str, Any],
-        key: str,
-        active_mask: np.ndarray | None = None,
-    ) -> list[Any]:
-        """Returns active values from Gymnasium's vector-info representation."""
-        value = env_infos.get(key)
-        if not isinstance(value, np.ndarray):
-            return [] if value is None else [value]
-        if value.ndim != 1:
-            raise ValueError(f"F1 vector info {key!r} must be one-dimensional")
-
-        mask = env_infos.get(f"_{key}")
-        if mask is None:
-            mask_array = np.ones(value.shape, dtype=bool)
-        else:
-            mask_array = np.asarray(mask)
-            if mask_array.shape != value.shape or mask_array.dtype != np.bool_:
-                raise ValueError(f"F1 vector info mask for {key!r} is invalid")
-        if active_mask is not None:
-            outer_mask = np.asarray(active_mask)
-            if outer_mask.shape != value.shape or outer_mask.dtype != np.bool_:
-                raise ValueError(f"F1 outer vector info mask for {key!r} is invalid")
-            mask_array = np.logical_and(mask_array, outer_mask)
-        return [item for item, active in zip(value, mask_array) if active]
 
     def append_step_result(self, result: ChunkStepResult):
         if result.actions is not None:
@@ -682,39 +578,6 @@ class EmbodiedRolloutResult:
             self.versions.append(result.versions)
         if result.forward_inputs:
             self.forward_inputs.append(result.forward_inputs)
-        if result.env_infos is not None:
-            info_sources: list[tuple[dict[str, Any], np.ndarray | None]] = [
-                (result.env_infos, None)
-            ]
-            final_info = result.env_infos.get("final_info")
-            if isinstance(final_info, dict):
-                final_mask = result.env_infos.get("_final_info")
-                if final_mask is None:
-                    raise ValueError("F1 final_info requires a vector info mask")
-                info_sources.append((final_info, np.asarray(final_mask)))
-
-            for env_infos, active_mask in info_sources:
-                manifests = self._active_vector_info_values(
-                    env_infos, "f1_manifest", active_mask
-                )
-                for manifest in manifests:
-                    if not isinstance(manifest, dict):
-                        raise ValueError(
-                            "F1 manifest vector info must contain mappings"
-                        )
-                    if self.f1_manifest is None:
-                        self.f1_manifest = copy.deepcopy(manifest)
-                    elif self.f1_manifest != manifest:
-                        raise ValueError("F1 rollout contains inconsistent manifests")
-                transition_groups = self._active_vector_info_values(
-                    env_infos, "f1_transitions", active_mask
-                )
-                for transitions in transition_groups:
-                    if not isinstance(transitions, (list, tuple)):
-                        raise ValueError(
-                            "F1 transitions vector info must contain sequences"
-                        )
-                    self.f1_transitions.extend(copy.deepcopy(list(transitions)))
 
     def mark_last_step_with_intervene_flags(self, intervene_flags: torch.Tensor):
         if not self.intervene_flags:
@@ -798,8 +661,6 @@ class EmbodiedRolloutResult:
         self.forward_inputs.clear()
         self.curr_obs.clear()
         self.next_obs.clear()
-        self.f1_manifest = None
-        self.f1_transitions.clear()
 
     def to_trajectory(self) -> Trajectory:
         # return [trajectory_length, B, ...]
@@ -855,8 +716,6 @@ class EmbodiedRolloutResult:
             if trajectory.versions is not None
             else torch.zeros(1, dtype=torch.float32)
         )
-        trajectory.f1_manifest = self.f1_manifest
-        trajectory.f1_transitions = list(self.f1_transitions) or None
 
         return trajectory
 
@@ -865,23 +724,6 @@ class EmbodiedRolloutResult:
         splited_trajectories: list[Trajectory] = [
             Trajectory() for _ in range(split_size)
         ]
-        action_chunks = (
-            torch.chunk(all_trajectory.actions, split_size, dim=1)
-            if all_trajectory.actions is not None
-            else ()
-        )
-        if (
-            all_trajectory.f1_transitions is not None
-            and len(action_chunks) != split_size
-        ):
-            raise ValueError(
-                "F1 action batch cannot be split into the requested chunks"
-            )
-        f1_transition_chunks = _split_f1_transitions_by_batch(
-            all_trajectory.f1_transitions,
-            all_trajectory.actions,
-            [int(chunk.shape[1]) for chunk in action_chunks],
-        )
 
         if len(all_trajectory.curr_obs) > 0:
             splited_obs = split_dict_to_chunk(
@@ -910,15 +752,6 @@ class EmbodiedRolloutResult:
             value = getattr(all_trajectory, field_name)
 
             if value is None or isinstance(value, dict):
-                if field_name == "f1_manifest" and value is not None:
-                    for i in range(split_size):
-                        setattr(
-                            splited_trajectories[i], field_name, copy.deepcopy(value)
-                        )
-                continue
-            if field_name == "f1_transitions":
-                for i, transitions in enumerate(f1_transition_chunks):
-                    setattr(splited_trajectories[i], field_name, transitions)
                 continue
 
             if isinstance(value, int) or isinstance(value, str):
@@ -942,25 +775,10 @@ class EmbodiedRolloutResult:
     ) -> list[Trajectory]:
         trajectory = self.to_trajectory()
         trajectories = [Trajectory() for _ in split_sizes]
-        f1_transition_splits = _split_f1_transitions_by_batch(
-            trajectory.f1_transitions,
-            trajectory.actions,
-            split_sizes,
-        )
 
         for field_name in trajectory.__dataclass_fields__:
             value = getattr(trajectory, field_name)
             if value is None:
-                continue
-            if field_name == "f1_manifest":
-                for split_trajectory in trajectories:
-                    setattr(split_trajectory, field_name, copy.deepcopy(value))
-                continue
-            if field_name == "f1_transitions":
-                for split_trajectory, split_value in zip(
-                    trajectories, f1_transition_splits, strict=True
-                ):
-                    setattr(split_trajectory, field_name, split_value)
                 continue
             if isinstance(value, (int, str)):
                 for split_trajectory in trajectories:

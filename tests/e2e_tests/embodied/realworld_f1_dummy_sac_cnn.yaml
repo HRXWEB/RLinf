@@ -66,9 +66,6 @@ algorithm:
     min_buffer_size: 1
     auto_save: false
 
-  f1_replay:
-    enabled: true
-
   target_update_freq: 1
 
 env:
@@ -76,7 +73,6 @@ env:
 
   train:
     action_dim: 14
-    action_schema: f1-normalized-action-v1
     rollout_epoch: 1
     total_num_envs: 1
     max_episode_steps: 10
@@ -131,7 +127,6 @@ env:
 
   eval:
     action_dim: 14
-    action_schema: f1-normalized-action-v1
     rollout_epoch: 1
     total_num_envs: 1
     max_episode_steps: 10

@@ -15,13 +15,11 @@
 """Integration coverage for the F1 Gym registration and Hydra config."""
 
 import importlib
-import inspect
 import json
 import os
 import subprocess
 import sys
 import tempfile
-import textwrap
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import ModuleType
@@ -33,7 +31,7 @@ import pytest
 from f1_robot_controller import create_controller, load_controller_config
 from gymnasium.envs.registration import registry
 from hydra import compose, initialize_config_dir
-from omegaconf import OmegaConf, open_dict
+from omegaconf import OmegaConf
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
@@ -42,28 +40,6 @@ CONFIG_NAME = "realworld_dummy_f1_peg_sac_cnn_async"
 REAL_CONFIG_NAME = "realworld_f1_peg_rlpd_cnn_async"
 ENV_ID = "F1DualArmPegInsertionEnv-v1"
 LEGACY_ENV_ID = "F1DualArmPegInsertionEnv-v0"
-LEGACY_SPECS = {
-    "DOSW1PickEnv-v1": "rlinf.envs.realworld.dosw1.tasks:create_dosw1_pick_env",
-    "FrankaEnv-v1": "rlinf.envs.realworld.franka.tasks:create_franka_env",
-    "DualFrankaJointEnv-v1": (
-        "rlinf.envs.realworld.franka.tasks:create_dual_franka_joint_env"
-    ),
-    "DualFrankaTCPEnv-v1": (
-        "rlinf.envs.realworld.franka.tasks:create_dual_franka_tcp_env"
-    ),
-    "PegInsertionEnv-v1": (
-        "rlinf.envs.realworld.franka.tasks:create_peg_insertion_env"
-    ),
-    "FrankaBinRelocationEnv-v1": (
-        "rlinf.envs.realworld.franka.tasks:create_franka_bin_relocation_env"
-    ),
-    "BottleEnv-v1": "rlinf.envs.realworld.franka.tasks:create_bottle_env",
-    "DexpnpEnv-v1": "rlinf.envs.realworld.franka.tasks:create_dexpnp_env",
-    "GimArmPegInsertionEnv-v1": (
-        "rlinf.envs.realworld.gim_arm.tasks:GimArmPegInsertionEnv"
-    ),
-    "ButtonEnv-v1": "rlinf.envs.realworld.xsquare.tasks:create_button_env",
-}
 F1_STATE_ORDER = [
     "left_joint_position",
     "left_gripper",
@@ -92,8 +68,6 @@ def test_f1_runtime_source_excludes_removed_phase_gate_terms() -> None:
     active_sources = [
         *sorted((ROOT / "toolkits" / "f1").glob("*.py")),
         ROOT / "rlinf" / "envs" / "realworld" / "f1" / "f1_robot_env.py",
-        ROOT / "rlinf" / "data" / "embodied" / "f1_schema.py",
-        ROOT / "rlinf" / "data" / "f1_replay_admission.py",
     ]
 
     matches: list[str] = []
@@ -103,24 +77,6 @@ def test_f1_runtime_source_excludes_removed_phase_gate_terms() -> None:
             if term in text:
                 matches.append(f"{source.relative_to(ROOT)} contains {term}")
     assert matches == []
-
-
-def test_f1_dataset_validator_has_no_artifact_provenance_requirements() -> None:
-    """Offline dataset validation is limited to descriptor and transitions."""
-
-    text = (ROOT / "toolkits" / "f1" / "validate_f1_dataset.py").read_text(
-        encoding="utf-8"
-    )
-    forbidden = (
-        "sha256",
-        "commit",
-        "approval",
-        "handoff",
-        "expected-manifest",
-        "validate_f1_manifest_compatibility",
-    )
-
-    assert [term for term in forbidden if term in text] == []
 
 
 def test_f1_docs_describe_the_public_training_workflow() -> None:
@@ -143,7 +99,6 @@ def test_f1_docs_describe_the_public_training_workflow() -> None:
         "临时 controller JSON",
         "demo_buffer.load_path",
         "~algorithm.demo_buffer",
-        "algorithm.demo_fraction=0.0",
         "requirements/install.sh f1-realworld",
         "F1_ROBOT_CONTROLLER_PACKAGE",
     )
@@ -246,36 +201,6 @@ def test_documented_controller_json_extraction_snippets_execute_and_load(
         assert load_controller_config(json.loads(output.read_text(encoding="utf-8")))
 
 
-def _gym_registration_metadata_conflicts() -> dict[str, object]:
-    """Return one non-default value for every supported registration option."""
-
-    candidates: dict[str, object] = {
-        "reward_threshold": 1.0,
-        "nondeterministic": True,
-        "max_episode_steps": 1,
-        "order_enforce": False,
-        "disable_env_checker": True,
-        "kwargs": {"conflict": True},
-        "vector_entry_point": "conflicting.module:create_vector_env",
-        "apply_api_compatibility": True,
-        "autoreset": True,
-    }
-    supported = inspect.signature(gym.register).parameters
-    return {name: value for name, value in candidates.items() if name in supported}
-
-
-def _load_realworld_package(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    """Reload the real package and its F1 registration without dependency stubs."""
-
-    monkeypatch.syspath_prepend(str(ROOT))
-    envs_package = importlib.import_module("rlinf.envs")
-    monkeypatch.delattr(envs_package, "realworld", raising=False)
-    for name in tuple(sys.modules):
-        if name.startswith("rlinf.envs.realworld"):
-            monkeypatch.delitem(sys.modules, name, raising=False)
-    return importlib.import_module("rlinf.envs.realworld")
-
-
 def _compose_config(monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setenv("EMBODIED_PATH", str(ROOT / "examples" / "embodiment"))
     with initialize_config_dir(config_dir=str(CONFIG_ROOT), version_base=None):
@@ -346,7 +271,6 @@ def _assert_no_removed_f1_runtime_fields(payload: Any) -> None:
         "operator_control",
         "phase2_handoff",
         "command_capability",
-        "f1_replay_manifest",
         "handoff",
         "phase",
     )
@@ -361,14 +285,13 @@ def _motion_envelope_file() -> Path:
 
 @pytest.fixture
 def registered_f1(monkeypatch: pytest.MonkeyPatch) -> Iterator[ModuleType]:
-    for env_id in (ENV_ID, LEGACY_ENV_ID, *LEGACY_SPECS):
-        registry.pop(env_id, None)
-    module = _load_realworld_package(monkeypatch)
+    registry.pop(ENV_ID, None)
+    module = importlib.import_module("rlinf.envs.realworld.f1.tasks")
+    importlib.reload(module)
     try:
         yield module
     finally:
-        for env_id in (ENV_ID, LEGACY_ENV_ID, *LEGACY_SPECS):
-            registry.pop(env_id, None)
+        registry.pop(ENV_ID, None)
 
 
 def _make_env(
@@ -462,8 +385,10 @@ def test_hydra_composes_the_f1_train_and_eval_contract(
     for section in (cfg.env.train, cfg.env.eval):
         assert section.env_type == "realworld"
         assert section.action_dim == 14
-        assert section.action_schema == "f1-normalized-action-v1"
         assert section.init_params.id == ENV_ID
+        assert section.init_params.registration_module == (
+            "rlinf.envs.realworld.f1.tasks"
+        )
         assert section.video_cfg.save_video is False
         assert section.auto_reset is True
         assert section.max_episode_steps == 10
@@ -499,13 +424,13 @@ def test_real_f1_training_config_is_self_contained_ros2_rlpd(
     assert cfg.runner.weight_sync_interval == 1
     assert cfg.runner.logger.log_path == "./logs/f1-peg-rlpd"
     assert cfg.algorithm.update_epoch == 1
-    assert cfg.algorithm.demo_fraction == 0.4
     assert "demo_buffer" in cfg.algorithm
     assert cfg.algorithm.replay_buffer.min_buffer_size == 1
-    assert cfg.algorithm.f1_replay.enabled is True
     assert cfg.env.train.auto_reset is False
     assert cfg.env.train.max_episode_steps == 10
-    assert cfg.env.train.action_schema == "f1-normalized-action-v1"
+    assert cfg.env.train.init_params.registration_module == (
+        "rlinf.envs.realworld.f1.tasks"
+    )
     assert cfg.env.train.override_cfg.max_num_steps == 10
     assert cfg.env.train.override_cfg.controller.backend == "ros2"
     assert cfg.env.train.override_cfg.controller.control_period_s == pytest.approx(0.1)
@@ -625,351 +550,6 @@ def test_documented_controller_json_extraction_matches_strict_loader(
     assert loaded_controller.ros2.command_topics["left_tcp"] == (
         "/motion_ctl/left_arm/tcp_pos_ctl"
     )
-
-
-def test_importing_realworld_is_f1_only_and_has_no_process_side_effects() -> None:
-    script = textwrap.dedent(
-        f"""
-        import json
-        import sys
-        from types import ModuleType
-
-        process_calls = []
-        psutil = ModuleType("psutil")
-        psutil.process_iter = lambda: process_calls.append("scan")
-        sys.modules["psutil"] = psutil
-
-        import gymnasium as gym
-        import rlinf.envs.realworld as realworld
-
-        forbidden_prefixes = (
-            "cv2",
-            "cv_bridge",
-            "rclpy",
-            "rospy",
-            "turtle2_basic",
-            "rlinf.envs.realworld.dosw1",
-            "rlinf.envs.realworld.franka",
-            "rlinf.envs.realworld.gim_arm",
-            "rlinf.envs.realworld.xsquare",
-        )
-        forbidden = sorted(
-            name
-            for name in sys.modules
-            if any(
-                name == prefix or name.startswith(prefix + ".")
-                for prefix in forbidden_prefixes
-            )
-        )
-        print(json.dumps({{
-            "entry_point": gym.spec({ENV_ID!r}).entry_point,
-            "legacy_ids": sorted(
-                env_id
-                for env_id in {sorted(LEGACY_SPECS)!r}
-                if gym.spec(env_id) is not None
-            ),
-            "forbidden": forbidden,
-            "process_calls": process_calls,
-            "exports": list(realworld.__all__),
-        }}))
-        """
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    payload = json.loads(result.stdout)
-
-    assert payload["entry_point"] == (
-        "rlinf.envs.realworld.f1.tasks:DualArmPegInsertionEnv"
-    )
-    assert payload["legacy_ids"] == sorted(LEGACY_SPECS)
-    assert payload["forbidden"] == []
-    assert payload["process_calls"] == []
-    assert payload["exports"] == [
-        "DualFrankaEnv",
-        "DualFrankaJointEnv",
-        "DualFrankaJointRobotConfig",
-        "DualFrankaTCPEnv",
-        "DualFrankaTCPRobotConfig",
-        "DualFrankaRobotConfig",
-        "DOSW1Config",
-        "DOSW1Env",
-        "dosw1_tasks",
-        "FrankaEnv",
-        "FrankaRobotConfig",
-        "FrankaRobotState",
-        "f1_tasks",
-        "franka_tasks",
-        "GimArmEnv",
-        "GimArmRobotConfig",
-        "GimArmRobotState",
-        "gim_arm_tasks",
-        "Turtle2Env",
-        "Turtle2RobotConfig",
-        "Turtle2RobotState",
-        "xsquare_tasks",
-        "RealWorldEnv",
-    ]
-
-    with pytest.raises(gym.error.Error):
-        gym.spec(LEGACY_ENV_ID)
-
-
-@pytest.mark.parametrize(
-    ("option_name", "option_value"),
-    _gym_registration_metadata_conflicts().items(),
-)
-def test_parent_import_rejects_conflicting_f1_registration_metadata(
-    option_name: str,
-    option_value: object,
-) -> None:
-    registration_option = {option_name: option_value}
-    script = textwrap.dedent(
-        f"""
-        import gymnasium as gym
-        from gymnasium.envs.registration import WrapperSpec
-
-        wrapper = WrapperSpec(
-            name="F1SupervisedEpisodeControl",
-            entry_point=(
-                "rlinf.envs.realworld.f1.tasks:"
-                "_make_supervised_episode_control"
-            ),
-            kwargs={{}},
-        )
-        gym.register(
-            id={ENV_ID!r},
-            entry_point=(
-                "rlinf.envs.realworld.f1.tasks:DualArmPegInsertionEnv"
-            ),
-            additional_wrappers=(wrapper,),
-            **{registration_option!r},
-        )
-        import rlinf.envs.realworld  # noqa: F401
-        """
-    )
-
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-
-    assert result.returncode != 0
-    assert "RuntimeError" in result.stderr
-    assert ENV_ID in result.stderr
-
-
-def test_parent_import_accepts_only_the_exact_canonical_f1_spec() -> None:
-    script = textwrap.dedent(
-        f"""
-        import importlib
-        import json
-
-        import gymnasium as gym
-        gym.register(
-            id={ENV_ID!r},
-            entry_point=(
-                "rlinf.envs.realworld.f1.tasks:DualArmPegInsertionEnv"
-            ),
-        )
-        before = gym.spec({ENV_ID!r})
-        import rlinf.envs.realworld.f1.tasks as tasks
-        importlib.reload(tasks)
-        after = gym.spec({ENV_ID!r})
-        print(json.dumps({{
-            "same_spec": before is after,
-            "wrappers": [
-                {{
-                    "name": item.name,
-                    "entry_point": item.entry_point,
-                    "kwargs": item.kwargs,
-                }}
-                for item in after.additional_wrappers
-            ],
-        }}))
-        """
-    )
-
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    payload = json.loads(result.stdout)
-
-    assert payload == {
-        "same_spec": True,
-        "wrappers": [],
-    }
-
-
-def test_parent_import_rejects_conflicting_f1_additional_wrappers() -> None:
-    script = textwrap.dedent(
-        f"""
-        import gymnasium as gym
-        from gymnasium.envs.registration import WrapperSpec
-
-        wrapper = WrapperSpec(
-            name="ConflictingWrapper",
-            entry_point="conflicting.module:wrap",
-            kwargs={{}},
-        )
-        gym.register(
-            id={ENV_ID!r},
-            entry_point=(
-                "rlinf.envs.realworld.f1.tasks:DualArmPegInsertionEnv"
-            ),
-            additional_wrappers=(wrapper,),
-        )
-        import rlinf.envs.realworld  # noqa: F401
-        """
-    )
-
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-
-    assert result.returncode != 0
-    assert "RuntimeError" in result.stderr
-    assert ENV_ID in result.stderr
-
-
-def test_direct_legacy_gym_factory_runs_setup_once_before_construction(
-    registered_f1: ModuleType,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    del registered_f1
-    order: list[str] = []
-    received_kwargs: list[dict[str, object]] = []
-
-    class ControlledLegacyEnv(gym.Env):
-        metadata = {"render_modes": []}
-        action_space = gym.spaces.Box(-1.0, 1.0, shape=(1,), dtype=np.float32)
-        observation_space = gym.spaces.Box(
-            -1.0,
-            1.0,
-            shape=(1,),
-            dtype=np.float32,
-        )
-
-    def create_franka_env(**kwargs: object) -> gym.Env:
-        order.append("constructor")
-        assert order[0] == "setup"
-        received_kwargs.append(kwargs)
-        return ControlledLegacyEnv()
-
-    tasks_module = ModuleType("rlinf.envs.realworld.franka.tasks")
-    tasks_module.create_franka_env = create_franka_env
-    monkeypatch.setitem(
-        sys.modules,
-        "rlinf.envs.realworld.franka.tasks",
-        tasks_module,
-    )
-
-    import psutil
-
-    def process_iter() -> list[object]:
-        order.append("setup")
-        return []
-
-    monkeypatch.setattr(psutil, "process_iter", process_iter)
-    factory_kwargs = {
-        "override_cfg": {"is_dummy": True},
-        "worker_info": None,
-        "hardware_info": None,
-        "env_idx": 3,
-        "env_cfg": {"sentinel": "preserved"},
-    }
-
-    first = gym.make("FrankaEnv-v1", **factory_kwargs)
-    second = gym.make("FrankaEnv-v1", **factory_kwargs)
-    try:
-        assert order == ["setup", "constructor", "constructor"]
-        assert received_kwargs == [factory_kwargs, factory_kwargs]
-    finally:
-        first.close()
-        second.close()
-
-
-def test_explicit_legacy_tasks_import_keeps_the_lightweight_proxy_registration(
-    registered_f1: ModuleType,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    proxy_entry_point = gym.spec("GimArmPegInsertionEnv-v1").entry_point
-    gim_arm_package = ModuleType("rlinf.envs.realworld.gim_arm")
-    gim_arm_package.__package__ = "rlinf.envs.realworld.gim_arm"
-    gim_arm_package.__path__ = [str(ROOT / "rlinf" / "envs" / "realworld" / "gim_arm")]
-    monkeypatch.setitem(
-        sys.modules,
-        "rlinf.envs.realworld.gim_arm",
-        gim_arm_package,
-    )
-    peg_module = ModuleType("rlinf.envs.realworld.gim_arm.tasks.peg_insertion")
-    peg_module.GimArmPegInsertionEnv = type("ControlledGimArmEnv", (), {})
-    monkeypatch.setitem(
-        sys.modules,
-        "rlinf.envs.realworld.gim_arm.tasks.peg_insertion",
-        peg_module,
-    )
-
-    tasks_module = registered_f1.gim_arm_tasks
-
-    assert tasks_module.__name__ == "rlinf.envs.realworld.gim_arm.tasks"
-    assert gym.spec("GimArmPegInsertionEnv-v1").entry_point == proxy_entry_point
-    for export_name, module_name in (
-        ("dosw1_tasks", "rlinf.envs.realworld.dosw1.tasks"),
-        ("franka_tasks", "rlinf.envs.realworld.franka.tasks"),
-        ("xsquare_tasks", "rlinf.envs.realworld.xsquare.tasks"),
-    ):
-        controlled_tasks = ModuleType(module_name)
-        monkeypatch.setitem(sys.modules, module_name, controlled_tasks)
-        assert getattr(registered_f1, export_name) is controlled_tasks
-
-
-def test_parent_import_rejects_a_conflicting_legacy_registration(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    for env_id in (ENV_ID, LEGACY_ENV_ID, *LEGACY_SPECS):
-        registry.pop(env_id, None)
-    gym.register("FrankaEnv-v1", entry_point="conflicting.module:factory")
-    try:
-        with pytest.raises(RuntimeError, match="FrankaEnv-v1"):
-            _load_realworld_package(monkeypatch)
-    finally:
-        for env_id in (ENV_ID, LEGACY_ENV_ID, *LEGACY_SPECS):
-            registry.pop(env_id, None)
-
-
-def test_parent_import_normalizes_an_exact_legacy_registration_to_its_proxy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    for env_id in (ENV_ID, LEGACY_ENV_ID, *LEGACY_SPECS):
-        registry.pop(env_id, None)
-    gym.register("FrankaEnv-v1", entry_point=LEGACY_SPECS["FrankaEnv-v1"])
-    try:
-        _load_realworld_package(monkeypatch)
-
-        assert gym.spec("FrankaEnv-v1").entry_point == (
-            "rlinf.envs.realworld.registration:create_franka_env"
-        )
-    finally:
-        for env_id in (ENV_ID, LEGACY_ENV_ID, *LEGACY_SPECS):
-            registry.pop(env_id, None)
 
 
 def test_each_gym_make_uses_direct_task_env_without_dynamic_operator_config(
@@ -1140,107 +720,6 @@ def test_composed_config_runs_realworld_env_through_the_ten_step_horizon(
         )
     finally:
         env.close()
-
-
-def test_custom_realworld_id_runs_legacy_setup_once_before_each_constructor(
-    registered_f1: ModuleType,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    del registered_f1
-    custom_env_id = "Task5ControlledRealWorld-v0"
-    order: list[str] = []
-
-    class ControlledRealWorldTask(gym.Env):
-        metadata = {"render_modes": []}
-
-        def __init__(
-            self,
-            override_cfg: Mapping[str, object],
-            worker_info: object,
-            hardware_info: object,
-            env_idx: int,
-            env_cfg: Mapping[str, object],
-        ) -> None:
-            del override_cfg, worker_info, hardware_info, env_idx, env_cfg
-            order.append("constructor")
-            assert order[0] == "setup"
-            self.action_space = gym.spaces.Box(
-                -1.0,
-                1.0,
-                shape=(16,),
-                dtype=np.float32,
-            )
-            self.observation_space = gym.spaces.Dict(
-                {
-                    "state": gym.spaces.Dict(
-                        {
-                            "left_joint_position": gym.spaces.Box(
-                                -np.inf,
-                                np.inf,
-                                shape=(7,),
-                                dtype=np.float32,
-                            ),
-                            "left_gripper": gym.spaces.Box(
-                                0.0,
-                                1.0,
-                                shape=(1,),
-                                dtype=np.float32,
-                            ),
-                            "right_joint_position": gym.spaces.Box(
-                                -np.inf,
-                                np.inf,
-                                shape=(7,),
-                                dtype=np.float32,
-                            ),
-                            "right_gripper": gym.spaces.Box(
-                                0.0,
-                                1.0,
-                                shape=(1,),
-                                dtype=np.float32,
-                            ),
-                        }
-                    ),
-                    "frames": gym.spaces.Dict(
-                        {
-                            key: gym.spaces.Box(
-                                0,
-                                255,
-                                shape=(128, 128, 3),
-                                dtype=np.uint8,
-                            )
-                            for key in (
-                                "head_color",
-                                "left_wrist_color",
-                                "right_wrist_color",
-                            )
-                        }
-                    ),
-                }
-            )
-            self.task_description = "controlled legacy task"
-
-    import psutil
-
-    def process_iter() -> list[object]:
-        order.append("setup")
-        return []
-
-    monkeypatch.setattr(psutil, "process_iter", process_iter)
-    gym.register(custom_env_id, entry_point=ControlledRealWorldTask)
-    cfg = _compose_config(monkeypatch)
-    with open_dict(cfg.env.train.init_params):
-        cfg.env.train.init_params.id = custom_env_id
-    from rlinf.envs import get_env_cls
-
-    env_cls = get_env_cls("realworld", cfg.env.train)
-    first = env_cls(cfg.env.train, 1, 0, 1, None)
-    second = env_cls(cfg.env.train, 1, 1, 1, None)
-    try:
-        assert order == ["setup", "constructor", "constructor"]
-    finally:
-        first.env.close()
-        second.env.close()
-        registry.pop(custom_env_id, None)
 
 
 def test_manual_mode_never_approves_robot_reset_automatically(

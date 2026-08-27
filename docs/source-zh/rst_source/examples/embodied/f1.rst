@@ -66,8 +66,8 @@ backend。
      - Reward
      - Prompt
    * - 三路 RGB：``head_color``、``left_wrist_color``、``right_wrist_color``；16D 手臂/夹爪状态
-     - 14D normalized ``f1-normalized-action-v1`` action，范围 ``[-1, 1]``。Env 在 replay audit 中记录 normalized action、physical delta 和 absolute target。
-     - ``F1DualArmPegInsertionEnv-v1`` 返回的任务 reward 和 success signal。Controller fault 会停止 motion，不会写入伪造 transition。
+     - 14D normalized action，范围 ``[-1, 1]``。Env 将其映射为左右 TCP delta 和 gripper target。
+     - ``F1DualArmPegInsertionEnv-v1`` 返回的任务 reward 和 success signal。Controller fault 会停止 motion 并拒绝该 step。
      - ``Use both arms cooperatively to insert the peg into the matching hole.``
 
 架构与节点角色
@@ -228,21 +228,15 @@ GPU server：
 准备 RLPD Demonstration
 -----------------------
 
-默认 F1 配置通过 ``algorithm.demo_fraction: 0.4`` 启用 RLPD。启动前，将
-``algorithm.demo_buffer.load_path`` 设置为非空的 F1 demonstration dataset；
-其 replay descriptor 必须与 observation、action 和 action-scale schema 一致。
-先验证数据集：
+F1 RLPD 配置要求非空 demonstration buffer。将
+``algorithm.demo_buffer.load_path`` 设置为同一任务采集的 RLinf replay buffer，
+并确保 observation 和 14 维 action 的 shape 与当前配置一致。
+
+如果只训练 online SAC，请删除 demo-buffer mapping：
 
 .. code-block:: bash
 
-   python toolkits/f1/validate_f1_dataset.py \
-     --dataset /path/to/f1-peg-demo-buffer
-
-如果只训练 online SAC，请删除 demo-buffer mapping，并把采样比例设为零：
-
-.. code-block:: bash
-
-   '~algorithm.demo_buffer' algorithm.demo_fraction=0.0
+   '~algorithm.demo_buffer'
 
 运行训练
 --------
@@ -262,8 +256,7 @@ head 启动 RLPD 训练：
 
 .. code-block:: bash
 
-   '~algorithm.demo_buffer' \
-   algorithm.demo_fraction=0.0
+   '~algorithm.demo_buffer'
 
 What this does: ActorGroup 和 RolloutGroup 在 ``gpu`` node group；EnvGroup 通过
 ``/opt/rlinf-venv/bin/python`` 在 ``f1`` node group。
@@ -280,8 +273,6 @@ What this does: ActorGroup 和 RolloutGroup 在 ``gpu`` node group；EnvGroup �
    * - ``./logs/f1-peg-rlpd``
      - 打开 TensorBoard，检查 SAC losses、replay counts 和 timing。参考 :doc:`Training Metrics </rst_source/reference/metrics>`。
    * - ``./logs/f1-peg-rlpd/online-replay``
-     - 使用 ``python toolkits/f1/validate_f1_dataset.py --dataset ./logs/f1-peg-rlpd/online-replay`` 验证保存的 replay。
-   * - Replay audit fields
-     - 确认 normalized action、physical delta、absolute target、timestamps、reward 和 ``truncated`` 与本次运行一致。
+     - 确认 online replay buffer 已写入，并且 sample count 随采集增长。
    * - Safety stop
      - 用 ``Ctrl+C`` 停止 runner，然后在两个节点运行 ``ray stop``。如果出现 Controller fault，先停止 robot motion，并丢弃未完成 trajectory。

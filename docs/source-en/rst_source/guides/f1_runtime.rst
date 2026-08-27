@@ -207,21 +207,14 @@ Prepare RLPD Data
 -----------------
 
 The F1 RLPD configuration requires a non-empty demonstration buffer. Set
-``algorithm.demo_buffer.load_path`` to a dataset whose replay descriptor matches
-the configured F1 observation, action, and action-scale schema. Validate it
-before training:
+``algorithm.demo_buffer.load_path`` to an RLinf replay buffer collected for the
+same task, with the same observation and 14-dimensional action shapes.
+
+If you do not have demonstrations, run online SAC by removing the demo buffer:
 
 .. code-block:: bash
 
-   python toolkits/f1/validate_f1_dataset.py \
-     --dataset /path/to/f1-peg-demo-buffer
-
-If you do not have demonstrations, run online SAC by removing the demo buffer
-and setting its sampling fraction to zero:
-
-.. code-block:: bash
-
-   '~algorithm.demo_buffer' algorithm.demo_fraction=0.0
+   '~algorithm.demo_buffer'
 
 Run Training
 ------------
@@ -237,10 +230,8 @@ run. Launch training from the GPU head:
      actor.model.model_path=/path/to/RLinf-ResNet10-pretrained \
      algorithm.demo_buffer.load_path=/path/to/f1-peg-demo-buffer
 
-For online SAC, append ``'~algorithm.demo_buffer'`` and
-``algorithm.demo_fraction=0.0``. RLinf admits valid online transitions, samples
-demonstrations only when configured, performs SAC updates, and syncs Actor
-weights back to Rollout.
+For online SAC, append ``'~algorithm.demo_buffer'``. RLinf collects online
+transitions, performs SAC updates, and syncs Actor weights back to Rollout.
 
 Audit Logs, Replay, and Stop Safely
 -----------------------------------
@@ -257,8 +248,8 @@ Check the run before you repeat it.
      - ``ray status`` on the GPU head should show two live nodes before real runs.
    * - Training logs
      - Open TensorBoard under ``runner.logger.log_path`` and inspect replay counts, SAC losses, and timing metrics.
-   * - Replay audit
-     - ``python toolkits/f1/validate_f1_dataset.py --dataset ./logs/f1-peg-rlpd/online-replay``
+   * - Online replay
+     - Confirm that the replay buffer under ``runner.logger.log_path`` is written and its sample count grows.
    * - Safety stop
      - Stop the runner with ``Ctrl+C``. Run ``ray stop`` on the GPU server and stop the robot-side container. If Controller reports a fault, stop robot motion before collecting logs.
 
@@ -279,5 +270,5 @@ Use these checks before changing YAML:
      - Confirm both nodes select interfaces on the same routable network and use host networking for the robot-side container.
    * - Controller diagnostics fail
      - Fix ROS 2 discovery, topic names, message types, or stale sensors before running RLinf.
-   * - Replay validation fails
-     - Treat the trajectory as invalid. Inspect the audit fields and fix the source data or configuration before another robot run.
+   * - Replay does not grow
+     - Confirm ``rollout.collect_transitions: true``, check EnvGroup logs, and fix Controller errors before another robot run.

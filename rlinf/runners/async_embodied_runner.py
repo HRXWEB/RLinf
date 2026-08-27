@@ -57,7 +57,6 @@ class AsyncEmbodiedRunner(EmbodiedRunner):
         self._pending_rollout_weight_sync = None
         self._weight_sync_coalesced_total = 0
         self._weight_sync_request_total = 0
-        self._weight_sync_success_total = 0
         self.sync_weight_no_wait = self.cfg.actor.get("sync_weight_no_wait", False)
 
     def get_env_metrics(self) -> tuple[dict, list[dict], list[dict]]:
@@ -118,14 +117,11 @@ class AsyncEmbodiedRunner(EmbodiedRunner):
         rollout_handle.wait()
         actor_handle.wait()
         self._pending_rollout_weight_sync = None
-        self._weight_sync_success_total += 1
         return True
 
     def update_rollout_weights(self, no_wait=False):
         if not no_wait:
-            result = super().update_rollout_weights()
-            self._weight_sync_success_total += 1
-            return result
+            return super().update_rollout_weights()
 
         self._weight_sync_request_total += 1
         if not self._cleanup_pending_rollout_weight_sync(no_wait):
@@ -139,11 +135,6 @@ class AsyncEmbodiedRunner(EmbodiedRunner):
         rollout_handle: Handle = self.rollout.request_actor_sync_model()
         actor_handle: Handle = self.actor.sync_model_to_rollout()
         self._pending_rollout_weight_sync = (rollout_handle, actor_handle)
-
-    def _weight_sync_metrics(self) -> dict[str, int]:
-        return {
-            "train/weight_sync_success_total": self._weight_sync_success_total,
-        }
 
     def evaluate(self):
         env_handle: Handle = self.env.evaluate(
@@ -217,7 +208,6 @@ class AsyncEmbodiedRunner(EmbodiedRunner):
                             actor_result
                         ).items()
                     }
-                    training_metrics.update(self._weight_sync_metrics())
 
                     run_val, save_model, _ = check_progress(
                         self.global_step,
