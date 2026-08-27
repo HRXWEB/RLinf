@@ -40,19 +40,19 @@ _LAZY_EXPORTS = {
     ),
     "DOSW1Config": ("rlinf.envs.realworld.dosw1", "DOSW1Config"),
     "DOSW1Env": ("rlinf.envs.realworld.dosw1", "DOSW1Env"),
-    "dosw1_tasks": ("rlinf.envs.realworld.dosw1", "tasks"),
+    "dosw1_tasks": ("rlinf.envs.realworld.dosw1.tasks", None),
     "FrankaEnv": ("rlinf.envs.realworld.franka", "FrankaEnv"),
     "FrankaRobotConfig": ("rlinf.envs.realworld.franka", "FrankaRobotConfig"),
     "FrankaRobotState": ("rlinf.envs.realworld.franka", "FrankaRobotState"),
-    "franka_tasks": ("rlinf.envs.realworld.franka", "tasks"),
+    "franka_tasks": ("rlinf.envs.realworld.franka.tasks", None),
     "GimArmEnv": ("rlinf.envs.realworld.gim_arm", "GimArmEnv"),
     "GimArmRobotConfig": ("rlinf.envs.realworld.gim_arm", "GimArmRobotConfig"),
     "GimArmRobotState": ("rlinf.envs.realworld.gim_arm", "GimArmRobotState"),
-    "gim_arm_tasks": ("rlinf.envs.realworld.gim_arm", "tasks"),
+    "gim_arm_tasks": ("rlinf.envs.realworld.gim_arm.tasks", None),
     "Turtle2Env": ("rlinf.envs.realworld.xsquare", "Turtle2Env"),
     "Turtle2RobotConfig": ("rlinf.envs.realworld.xsquare", "Turtle2RobotConfig"),
     "Turtle2RobotState": ("rlinf.envs.realworld.xsquare", "Turtle2RobotState"),
-    "xsquare_tasks": ("rlinf.envs.realworld.xsquare", "tasks"),
+    "xsquare_tasks": ("rlinf.envs.realworld.xsquare.tasks", None),
     "RealWorldEnv": ("rlinf.envs.realworld.realworld_env", "RealWorldEnv"),
 }
 
@@ -61,7 +61,8 @@ def __getattr__(name: str):
     if name not in _LAZY_EXPORTS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     module_name, attr_name = _LAZY_EXPORTS[name]
-    value = getattr(import_module(module_name), attr_name)
+    module = import_module(module_name)
+    value = module if attr_name is None else getattr(module, attr_name)
     globals()[name] = value
     return value
 

@@ -259,6 +259,74 @@ print(json.dumps({
     }
 
 
+@pytest.mark.parametrize(
+    ("alias", "module_name", "cleanup_calls"),
+    [
+        (
+            "franka_tasks",
+            "rlinf.envs.realworld.franka.tasks",
+            ["cleanup"],
+        ),
+        (
+            "xsquare_tasks",
+            "rlinf.envs.realworld.xsquare.tasks",
+            ["cleanup"],
+        ),
+        (
+            "dosw1_tasks",
+            "rlinf.envs.realworld.dosw1.tasks",
+            [],
+        ),
+        (
+            "gim_arm_tasks",
+            "rlinf.envs.realworld.gim_arm.tasks",
+            [],
+        ),
+    ],
+)
+def test_realworld_package_task_aliases_import_task_modules(
+    alias: str, module_name: str, cleanup_calls: list[str]
+):
+    """Catch package-root task aliases resolving against parent packages."""
+    result = _run_fresh_python(
+        f"""
+import json
+import sys
+import torch
+
+from rlinf.envs.realworld.realworld_env import RealWorldEnv
+
+torch.Event = object
+cleanup_calls = []
+RealWorldEnv.realworld_setup = staticmethod(lambda: cleanup_calls.append("cleanup"))
+
+from rlinf.envs.realworld import {alias}
+
+print(json.dumps({{
+    "module": {alias}.__name__,
+    "cleanup_calls": cleanup_calls,
+    "loaded_siblings": sorted(
+        name for name in sys.modules
+        if name in {{
+            "rlinf.envs.realworld.franka.tasks",
+            "rlinf.envs.realworld.xsquare.tasks",
+            "rlinf.envs.realworld.gim_arm.tasks",
+            "rlinf.envs.realworld.dosw1.tasks",
+        }}
+        and name != {module_name!r}
+    ),
+}}))
+"""
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "module": module_name,
+        "cleanup_calls": cleanup_calls,
+        "loaded_siblings": [],
+    }
+
+
 def test_existing_ros1_registration_module_owns_historical_cleanup():
     """Catch moving ROS1 cleanup out of explicitly loaded ROS1 task modules."""
     result = _run_fresh_python(
