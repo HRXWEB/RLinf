@@ -21,4 +21,5 @@ video_cfg:
 
 init_params:
   id: "ButtonEnv-v1"
+  registration_module: "rlinf.envs.realworld.xsquare.tasks"
   num_envs: null

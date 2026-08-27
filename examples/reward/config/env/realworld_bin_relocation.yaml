@@ -22,4 +22,5 @@ video_cfg:
 
 init_params:
   id: "FrankaBinRelocationEnv-v1"
+  registration_module: "rlinf.envs.realworld.franka.tasks"
   num_envs: null
