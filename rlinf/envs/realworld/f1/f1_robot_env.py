@@ -834,7 +834,7 @@ class F1RobotEnv(gym.Env):
 
     def _stop_after_failure(self, context: str, error: BaseException) -> None:
         try:
-            self._active_controller.stop_experiment_motion(f"{context} failed: {error}")
+            self._active_controller.stop_command_dispatch(f"{context} failed: {error}")
         except BaseException:
             # Preserve the failure that required the safety stop.
             pass
@@ -848,7 +848,7 @@ class F1RobotEnv(gym.Env):
         except ControllerNotReadyError:
             return
         if health.ready and not health.faulted:
-            controller.stop_experiment_motion("starting robot reset")
+            controller.stop_command_dispatch("starting robot reset")
 
     def recapture_reset_snapshot(self) -> None:
         """Explicitly replace the session origin from measured robot state."""

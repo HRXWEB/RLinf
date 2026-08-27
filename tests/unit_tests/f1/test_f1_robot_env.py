@@ -345,8 +345,8 @@ class RecordingController(F1RobotController):
             raise error
         return self.controller_health
 
-    def stop_experiment_motion(self, reason: str) -> None:
-        self.events.append(("stop_experiment_motion", reason))
+    def stop_command_dispatch(self, reason: str) -> None:
+        self.events.append(("stop_command_dispatch", reason))
         self.stop_reasons.append(reason)
         if self.stop_error is not None:
             raise self.stop_error
@@ -1420,7 +1420,7 @@ def test_reset_reopens_stopped_controller_without_repeating_stop(
             "open",
             "wait_ready",
             "health",
-            "stop_experiment_motion",
+            "stop_command_dispatch",
         ]
     finally:
         env.close()
@@ -1445,7 +1445,7 @@ def test_reset_does_not_treat_other_health_errors_as_stopped(
             "open",
             "wait_ready",
             "health",
-            "stop_experiment_motion",
+            "stop_command_dispatch",
         ]
         assert controller.reset_commands == []
     finally:
