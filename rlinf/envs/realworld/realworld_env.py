@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import copy
+import importlib
 import os
 import pathlib
 import time
@@ -28,7 +31,6 @@ from omegaconf import OmegaConf
 
 from rlinf.envs.realworld.venv import NoAutoResetSyncVectorEnv
 from rlinf.envs.utils import to_tensor
-from rlinf.scheduler import WorkerInfo
 
 
 class RealWorldEnv(gym.Env):
@@ -66,7 +68,8 @@ class RealWorldEnv(gym.Env):
         self._init_reset_state_ids()
 
     def _create_env(self, env_idx: int):
-        worker_info: WorkerInfo = self.worker_info
+        self._load_registration_module()
+        worker_info = self.worker_info
         hardware_info = None
         if worker_info is not None and env_idx < len(worker_info.hardware_infos):
             hardware_info = worker_info.hardware_infos[env_idx]
@@ -80,6 +83,23 @@ class RealWorldEnv(gym.Env):
             env_cfg=self.cfg,
         )
         return env
+
+    def _load_registration_module(self) -> None:
+        registration_module = self.cfg.init_params.get("registration_module")
+        if not isinstance(registration_module, str) or not registration_module.strip():
+            raise ValueError(
+                "Real-world env config must set init_params.registration_module "
+                "to the module that registers the selected Gym task."
+            )
+
+        module_name = registration_module.strip()
+        try:
+            importlib.import_module(module_name)
+        except ImportError as exc:
+            raise ImportError(
+                "Failed to import real-world registration module "
+                f"{module_name!r} before gym.make()."
+            ) from exc
 
     @staticmethod
     def realworld_setup():

@@ -41,6 +41,9 @@ from rlinf.envs.realworld.franka.tasks.franka_bin_relocation import (
 from rlinf.envs.realworld.franka.tasks.peg_insertion_env import (
     PegInsertionEnv as PegInsertionEnv,
 )
+from rlinf.envs.realworld.realworld_env import RealWorldEnv
+
+RealWorldEnv.realworld_setup()
 
 
 def create_franka_env(

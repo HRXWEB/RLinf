@@ -23,4 +23,5 @@ video_cfg:
 
 init_params:
   id: "DOSW1PickEnv-v1"
+  registration_module: "rlinf.envs.realworld.dosw1.tasks"
   num_envs: null

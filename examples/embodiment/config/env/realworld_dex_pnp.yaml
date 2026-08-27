@@ -21,4 +21,5 @@ video_cfg:
 
 init_params:
   id: "DexpnpEnv-v1"
+  registration_module: "rlinf.envs.realworld.franka.tasks"
   num_envs: null

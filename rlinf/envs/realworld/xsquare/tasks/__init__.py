@@ -20,9 +20,12 @@ import gymnasium as gym
 from gymnasium.envs.registration import register
 
 from rlinf.envs.realworld.common.wrappers import apply_single_arm_wrappers
+from rlinf.envs.realworld.realworld_env import RealWorldEnv
 from rlinf.envs.realworld.xsquare.tasks.button_env import (
     ButtonEnv as ButtonEnv,
 )
+
+RealWorldEnv.realworld_setup()
 
 
 def create_button_env(

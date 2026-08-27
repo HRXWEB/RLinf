@@ -34,6 +34,7 @@ video_cfg:
 
 init_params:
   id: "DualFrankaJointEnv-v1"
+  registration_module: "rlinf.envs.realworld.franka.tasks"
   num_envs: null
 
 override_cfg:
