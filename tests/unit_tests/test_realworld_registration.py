@@ -127,7 +127,9 @@ def test_create_env_imports_configured_registration_module_before_gym_make(
     )
 
     def fake_make(**kwargs):
-        calls.append(("gym.make", kwargs["id"], "selected_realworld_tasks" in sys.modules))
+        calls.append(
+            ("gym.make", kwargs["id"], "selected_realworld_tasks" in sys.modules)
+        )
         assert calls == [
             ("registration_import", "selected_realworld_tasks"),
             ("gym.make", "SelectedRealWorldEnv-v1", True),
@@ -148,7 +150,9 @@ def test_create_env_rejects_missing_registration_module_before_gym_make(
     env = _make_env_shell(Path(), None, monkeypatch)
     monkeypatch.setattr(
         "gymnasium.make",
-        lambda **_kwargs: pytest.fail("gym.make must not run without registration_module"),
+        lambda **_kwargs: pytest.fail(
+            "gym.make must not run without registration_module"
+        ),
     )
 
     with pytest.raises(ValueError, match="registration_module"):
@@ -164,18 +168,20 @@ def test_create_env_rejects_invalid_registration_module_before_gym_make(
     env.cfg.init_params.registration_module = registration_module
     monkeypatch.setattr(
         "gymnasium.make",
-        lambda **_kwargs: pytest.fail("gym.make must not run with invalid module config"),
+        lambda **_kwargs: pytest.fail(
+            "gym.make must not run with invalid module config"
+        ),
     )
 
     with pytest.raises(ValueError, match="registration_module"):
         env._create_env(env_idx=0)
 
 
-def test_create_env_reports_import_error_before_gym_make(monkeypatch: pytest.MonkeyPatch):
+def test_create_env_reports_import_error_before_gym_make(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Catch hiding bad registration module paths behind Gym construction errors."""
-    env = _make_env_shell(
-        Path(), "rlinf.envs.realworld.no_such_tasks", monkeypatch
-    )
+    env = _make_env_shell(Path(), "rlinf.envs.realworld.no_such_tasks", monkeypatch)
     monkeypatch.setattr(
         "gymnasium.make",
         lambda **_kwargs: pytest.fail("gym.make must not run when module import fails"),
