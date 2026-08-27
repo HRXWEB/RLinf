@@ -2,8 +2,9 @@ F1 Two-Node Runtime
 ===================
 
 Build the F1 runtime as a normal two-node RLinf deployment. The GPU server owns
-training. The Thor container owns ROS 2, Controller ``0.2.0``, and the Env
-Worker. Both nodes join Ray after their rank and network interface are set.
+training. The robot-side ARM64 container owns ROS 2, the Controller, and the Env
+Worker. The reference deployment is validated on NVIDIA Thor. Both nodes join
+Ray after their rank and network interface are set.
 
 Runtime Boundary
 ----------------
@@ -23,7 +24,7 @@ script only on the GPU head.
      - Linux x86_64
      - Host ``uv`` / venv
      - Ray head, ActorGroup, RolloutGroup, optimizer, replay sampling, and logs.
-   * - F1 Thor
+   * - F1 robot node
      - Linux aarch64 / arm64
      - ROS 2 Jazzy container
      - Ray worker, EnvGroup, Controller ``backend: ros2``, sensor reads, and bounded robot commands.
@@ -37,7 +38,8 @@ script only on the GPU head.
 Prepare the GPU Environment
 ---------------------------
 
-Install the training environment on the GPU server:
+Install the embodied dependencies first. Then apply the F1 shared constraints
+and Controller package to the same environment:
 
 .. code-block:: bash
 
@@ -46,27 +48,33 @@ Install the training environment on the GPU server:
      --python 3.12.3 \
      --venv .venv-f1 \
      --install-rlinf
+   F1_ROBOT_CONTROLLER_PACKAGE=<wheel-path-package-url-or-pinned-git-url> \
+     bash requirements/install.sh f1-realworld \
+       --python 3.12.3 \
+       --venv .venv-f1
    source .venv-f1/bin/activate
-   python -c "import platform, ray; assert platform.python_version() == '3.12.3'; assert ray.__version__ == '2.57.0'"
+   python -c "import f1_robot_controller, platform, ray; assert platform.python_version() == '3.12.3'; assert ray.__version__ == '2.57.0'; assert callable(f1_robot_controller.create_controller)"
 
-What this does: it installs RLinf and the GPU-side training dependencies. It
-does not require ROS 2 imports on the GPU server.
+What this does: the first command installs GPU-side training dependencies. The
+second command pins the shared Ray runtime to ``2.57.0`` and installs the
+Controller package needed by F1 configuration and environment imports. It does
+not require ROS 2 on the GPU server.
 
-Build the Thor Image
---------------------
+Build the Robot-Side Image
+--------------------------
 
 Build the ARM64 image from the same RLinf source:
 
 .. code-block:: bash
 
-   export F1_ROBOT_CONTROLLER_PACKAGE_URL=git+ssh://git.example.com/f1-robot-controller.git@<controller-0.2.0-commit>
+   export F1_ROBOT_CONTROLLER_PACKAGE_URL=<package-url-or-pinned-git-url>
    docker build --platform linux/arm64 \
      -f docker/f1/Dockerfile \
      --build-arg F1_ROBOT_CONTROLLER_PACKAGE_URL="${F1_ROBOT_CONTROLLER_PACKAGE_URL}" \
      -t f1-rlinf-env:runtime-simplified .
 
 What this does: the Dockerfile creates a Python ``3.12.3`` venv, installs the
-shared F1 constraints, installs the supplied Controller ``0.2.0`` package with
+shared F1 constraints, installs the supplied Controller package with
 ``--no-deps``, copies RLinf source, runs ``requirements/install.sh f1-realworld``,
 and imports ROS message packages, Ray, RLinf, Controller, Pillow, ImageIO, and
 Torch during the build. For Docker, ``F1_ROBOT_CONTROLLER_PACKAGE_URL`` must be
@@ -98,6 +106,7 @@ Keep these fields inline:
    env:
      train:
        max_episode_steps: 10
+       max_steps_per_rollout_epoch: 10
        override_cfg:
          controller:
            backend: ros2
@@ -115,10 +124,14 @@ What this does: ``controller.backend`` selects the Controller implementation;
 with normal Hydra keys such as ``actor.model.model_path=/models/f1-cnn`` and
 ``runner.logger.log_path=/runs/f1-peg``.
 
+The three step fields accept positive integers. Keep them aligned for a single
+fixed-length collection window, or set them independently when the episode and
+rollout boundaries intentionally differ.
+
 Run Controller Diagnostics
 --------------------------
 
-Run these commands on Thor before a robot run:
+Run these commands on the robot-side node before a robot run:
 
 .. code-block:: bash
 
@@ -156,7 +169,7 @@ the temporary controller JSON it owns: the extracted ``controller`` mapping plus
 the sibling ``motion_envelope``. ``f1-controller doctor`` checks ROS 2
 discovery, required topics, message types, observation freshness, observation
 skew, and read-only connectivity. ``f1-controller read-state`` prints the
-normalized current robot state that RLinf reset uses as the session origin.
+normalized current robot state.
 
 Start the Ray Cluster
 ---------------------
@@ -172,7 +185,7 @@ Start the GPU head first:
    source ray_utils/realworld/f1/setup_before_ray.sh
    ray start --head --port=6379 --node-ip-address=<GPU_SERVER_IP>
 
-Start the Thor worker in the container:
+Start the robot-side worker in the container:
 
 .. code-block:: bash
 
@@ -186,59 +199,48 @@ Start the Thor worker in the container:
    '
 
 What this does: the setup script validates Python ``3.12.3``, Ray ``2.57.0``,
-the selected role, and the communication interface. On Thor it also sources ROS
-2 and sets ``RMW_IMPLEMENTATION=rmw_cyclonedds_cpp``.
+the selected role, and the communication interface. On the robot-side node it
+also sources ROS 2 and sets ``RMW_IMPLEMENTATION=rmw_cyclonedds_cpp``. The
+``thor`` value is the current runtime role token for the ARM64 robot node.
 
-Run the Fake Smoke
-------------------
+Prepare RLPD Data
+-----------------
 
-Run the software-only smoke on the GPU server:
+The F1 RLPD configuration requires a non-empty demonstration buffer. Set
+``algorithm.demo_buffer.load_path`` to a dataset whose replay descriptor matches
+the configured F1 observation, action, and action-scale schema. Validate it
+before training:
 
 .. code-block:: bash
 
-   EMBODIED_PATH="$PWD/examples/embodiment" \
-   python examples/embodiment/train_async.py \
-     --config-name realworld_dummy_f1_peg_sac_cnn_async
+   python toolkits/f1/validate_f1_dataset.py \
+     --dataset /path/to/f1-peg-demo-buffer
 
-What this does: it uses ``controller.backend: fake`` with the same Env action
-schema and 10-step horizon. Use this before every robot session to catch Python,
-Hydra, replay, and training-chain issues.
+If you do not have demonstrations, run online SAC by removing the demo buffer
+and setting its sampling fraction to zero:
 
-Run One-Step Real Motion Smoke
-------------------------------
+.. code-block:: bash
 
-Run one real command only after operator confirmation. Confirm the workspace is
-clear, the emergency stop is reachable, the robot starts from the expected pose,
-and a human is ready to stop motion.
+   '~algorithm.demo_buffer' algorithm.demo_fraction=0.0
+
+Run Training
+------------
+
+Confirm the robot workspace is clear and a trained operator is supervising the
+run. Launch training from the GPU head:
 
 .. code-block:: bash
 
    EMBODIED_PATH="$PWD/examples/embodiment" \
    python examples/embodiment/train_async.py \
      --config-name realworld_f1_peg_rlpd_cnn_async \
-     runner.max_steps=1 \
-     env.train.max_episode_steps=1 \
-     env.train.override_cfg.max_num_steps=1 \
-     algorithm.replay_buffer.auto_save=false
+     actor.model.model_path=/path/to/RLinf-ResNet10-pretrained \
+     algorithm.demo_buffer.load_path=/path/to/f1-peg-demo-buffer
 
-What this does: the entry script runs only on the GPU head. Ray schedules the
-Env Worker on Thor, reset reads the current robot state, and one Controller
-command is bounded by ``motion_envelope``.
-
-Run the 10-Step Async Chain
----------------------------
-
-Launch the bounded training chain from the GPU head:
-
-.. code-block:: bash
-
-   EMBODIED_PATH="$PWD/examples/embodiment" \
-   python examples/embodiment/train_async.py \
-     --config-name realworld_f1_peg_rlpd_cnn_async
-
-What this does: RLinf runs one 10-step episode, admits valid transitions to the
-online replay buffer, samples demo data if configured, performs the SAC/RLPD
-update, and syncs actor weights back to rollout.
+For online SAC, append ``'~algorithm.demo_buffer'`` and
+``algorithm.demo_fraction=0.0``. RLinf admits valid online transitions, samples
+demonstrations only when configured, performs SAC updates, and syncs Actor
+weights back to Rollout.
 
 Audit Logs, Replay, and Stop Safely
 -----------------------------------
@@ -258,7 +260,7 @@ Check the run before you repeat it.
    * - Replay audit
      - ``python toolkits/f1/validate_f1_dataset.py --dataset ./logs/f1-peg-rlpd/online-replay``
    * - Safety stop
-     - Stop the runner with ``Ctrl+C``. Run ``ray stop`` on the GPU server and stop the Thor container. If Controller reports a fault, stop robot motion before collecting logs.
+     - Stop the runner with ``Ctrl+C``. Run ``ray stop`` on the GPU server and stop the robot-side container. If Controller reports a fault, stop robot motion before collecting logs.
 
 Troubleshooting
 ---------------
@@ -272,10 +274,10 @@ Use these checks before changing YAML:
    * - Symptom
      - Check
    * - EnvGroup lands on the GPU node
-     - Confirm ``RLINF_NODE_RANK=1`` was set before Thor ran ``ray start``.
+     - Confirm ``RLINF_NODE_RANK=1`` was set before the robot node ran ``ray start``.
    * - Ray nodes cannot see each other
-     - Confirm both nodes use the same routable ``RLINF_COMM_NET_DEVICES`` interface and host networking for the Thor container.
+     - Confirm both nodes select interfaces on the same routable network and use host networking for the robot-side container.
    * - Controller diagnostics fail
      - Fix ROS 2 discovery, topic names, message types, or stale sensors before running RLinf.
    * - Replay validation fails
-     - Treat the trajectory as invalid. Inspect the audit fields and rerun the Fake smoke before another robot attempt.
+     - Treat the trajectory as invalid. Inspect the audit fields and fix the source data or configuration before another robot run.

@@ -63,7 +63,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 RUN . /opt/ros/jazzy/setup.sh && \
     . /opt/rlinf-venv/bin/activate && \
-    python -c "import PIL, control_msgs, cv_bridge, diagnostic_msgs, f1_robot_controller, geometry_msgs, imageio, map_msgs, nav_msgs, ray, rclpy, rlinf, sensor_msgs, tf2_msgs, torch; assert ray.__version__ == '2.57.0'; assert f1_robot_controller.__version__ == '0.2.0'"
+    python -c "import PIL, control_msgs, cv_bridge, diagnostic_msgs, f1_robot_controller, geometry_msgs, imageio, map_msgs, nav_msgs, ray, rclpy, rlinf, sensor_msgs, tf2_msgs, torch; assert ray.__version__ == '2.57.0'; assert callable(f1_robot_controller.create_controller); assert callable(f1_robot_controller.load_controller_config); assert callable(f1_robot_controller.validate_motion_envelope)"
 
 ENTRYPOINT ["/opt/rlinf/docker/f1/entrypoint.sh"]
 CMD ["bash"]

@@ -95,7 +95,7 @@ Targets:
     embodied               Install embodied model and envs (default).
     agentic                Install agentic stack (Megatron etc.).
     docs                   Install documentation requirements.
-    f1-realworld           Pin the shared F1 Ray runtime and install Controller 0.2.0.
+    f1-realworld           Pin the shared F1 Ray runtime and install the supplied Controller package.
 
 Options (for target=embodied):
     --model <name>         Embodied model to install: ${SUPPORTED_MODELS[*]}.
@@ -914,11 +914,11 @@ install_f1_realworld_runtime() {
 
     uv pip install -r "$repo_path/docker/f1/constraints/realworld-py312.txt"
     if [ -z "$F1_ROBOT_CONTROLLER_PACKAGE" ]; then
-        echo "F1 real-world runtime requires F1_ROBOT_CONTROLLER_PACKAGE to be a f1-robot-controller 0.2.0 wheel, package URL, or pinned git URL." >&2
+        echo "F1 real-world runtime requires F1_ROBOT_CONTROLLER_PACKAGE to be a f1-robot-controller wheel, package URL, or pinned git URL." >&2
         exit 1
     fi
     uv pip install --no-deps "$F1_ROBOT_CONTROLLER_PACKAGE"
-    python -c "import shutil; import f1_robot_controller as controller; assert controller.__version__ == '0.2.0'; assert callable(controller.create_controller); assert callable(controller.load_controller_config); assert callable(controller.validate_motion_envelope); assert shutil.which('f1-controller')"
+    python -c "import shutil; import f1_robot_controller as controller; assert callable(controller.create_controller); assert callable(controller.load_controller_config); assert callable(controller.validate_motion_envelope); assert shutil.which('f1-controller')"
     uv pip install --no-deps -e "$repo_path"
 
     ray_version="$(python -c 'import ray; print(ray.__version__)')"
@@ -926,7 +926,7 @@ install_f1_realworld_runtime() {
         echo "F1 Ray version mismatch: expected $F1_RUNTIME_RAY_VERSION, got $ray_version." >&2
         exit 1
     fi
-    python -c "import f1_robot_controller, rlinf; assert f1_robot_controller.__version__ == '0.2.0'"
+    python -c "import f1_robot_controller, rlinf; assert callable(f1_robot_controller.create_controller)"
     printf '%s\n' \
         "F1_RUNTIME_PYTHON_VERSION=$active_python" \
         "F1_RUNTIME_RAY_VERSION=$ray_version"

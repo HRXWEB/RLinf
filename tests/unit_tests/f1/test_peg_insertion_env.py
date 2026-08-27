@@ -155,7 +155,7 @@ def test_registration_exposes_only_canonical_v1_and_is_reload_safe(
     assert gym.spec(ENV_ID) is specification
 
 
-def test_config_has_fixed_dual_arm_horizon(task_module: ModuleType) -> None:
+def test_config_defaults_to_ten_steps(task_module: ModuleType) -> None:
     config = task_module.DualArmPegInsertionConfig(
         controller=_fake_controller_config(),
         action_scale=_action_scale(),
@@ -165,18 +165,18 @@ def test_config_has_fixed_dual_arm_horizon(task_module: ModuleType) -> None:
     assert config.max_num_steps == 10
 
 
-@pytest.mark.parametrize(
-    ("overrides", "expected_field"),
-    [
-        ({"max_num_steps": 5}, "max_num_steps"),
-    ],
-    ids=["noncanonical-horizon"],
-)
-def test_noncanonical_task_contract_fails_before_controller_creation(
+def test_task_accepts_a_custom_positive_horizon(task_module: ModuleType) -> None:
+    env = _make_task_env(max_num_steps=7)
+    try:
+        assert isinstance(env.unwrapped, task_module.DualArmPegInsertionEnv)
+        assert env.unwrapped.config.max_num_steps == 7
+    finally:
+        env.close()
+
+
+def test_nonpositive_horizon_fails_before_controller_creation(
     task_module: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
-    overrides: dict[str, object],
-    expected_field: str,
 ) -> None:
     controller_factory_calls: list[object] = []
     env_module = sys.modules["rlinf.envs.realworld.f1.f1_robot_env"]
@@ -187,8 +187,8 @@ def test_noncanonical_task_contract_fails_before_controller_creation(
 
     monkeypatch.setattr(env_module, "create_controller", fail_if_controller_is_created)
 
-    with pytest.raises(ValueError, match=expected_field):
-        _make_task_env(**overrides)
+    with pytest.raises(ValueError, match="max_num_steps"):
+        _make_task_env(max_num_steps=0)
 
     assert controller_factory_calls == []
 
@@ -213,7 +213,7 @@ def test_direct_gym_make_has_no_operator_wrapper_and_uses_current_state_origin(
         env.close()
 
 
-def test_explicit_canonical_task_contract_is_accepted(
+def test_explicit_default_task_horizon_is_accepted(
     task_module: ModuleType,
 ) -> None:
     env = _make_task_env(

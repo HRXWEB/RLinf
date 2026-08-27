@@ -20,22 +20,10 @@ from typing import Any
 
 from ..f1_robot_env import F1RobotConfig, F1RobotEnv
 
-_CANONICAL_MAX_NUM_STEPS = 10
-
 
 @dataclass
 class DualArmPegInsertionConfig(F1RobotConfig):
-    """Frozen phase-one configuration for dual-arm peg insertion."""
-
-    max_num_steps: int = _CANONICAL_MAX_NUM_STEPS
-
-    def __post_init__(self) -> None:
-        """Normalize base values, then enforce the frozen task contract."""
-
-        super().__post_init__()
-        expected_steps = _CANONICAL_MAX_NUM_STEPS
-        if self.max_num_steps != expected_steps:
-            raise ValueError(f"max_num_steps must be {expected_steps} for this task")
+    """Configuration for dual-arm peg insertion."""
 
 
 class DualArmPegInsertionEnv(F1RobotEnv):

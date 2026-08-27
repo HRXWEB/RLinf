@@ -30,7 +30,6 @@ SETUP_SCRIPT = ROOT / "ray_utils" / "realworld" / "f1" / "setup_before_ray.sh"
 
 RAY_VERSION = "2.57.0"
 PYTHON_VERSION = "3.12.3"
-CONTROLLER_VERSION = "0.2.0"
 ROS_BASE_DIGEST = "2589a8fba5257307857890173c069852c2abf913a0be7970f172478baecb09e4"
 UV_IMAGE_DIGEST = "a5727064a0de127bdb7c9d3c1383f3a9ac307d9f2d8a391edc7896c54289ced0"
 
@@ -50,7 +49,7 @@ def test_f1_runtime_constraints_lock_the_shared_runtime() -> None:
     text = _read(CONSTRAINTS)
 
     assert f"ray[default]=={RAY_VERSION}" in text
-    assert f"f1-robot-controller=={CONTROLLER_VERSION}" not in text
+    assert "f1-robot-controller==" not in text
     assert "numpy==1.26.4" in text
     assert "gymnasium==0.29.1" in text
     assert "pillow==12.3.0" in text.lower()
@@ -131,9 +130,13 @@ def test_f1_install_script_runtime_target_is_plain_dependency_install() -> None:
     assert 'uv pip install --no-deps "$F1_ROBOT_CONTROLLER_PACKAGE"' in body
     assert 'uv pip install --no-deps -e "$repo_path"' in body
     assert 'uv pip install --no-deps "f1-robot-controller==0.2.0"' not in body
-    assert "assert f1_robot_controller.__version__ == '0.2.0'" in body
+    assert "f1_robot_controller.__version__" not in body
+    assert "callable(controller.create_controller)" in body
+    assert "callable(controller.load_controller_config)" in body
+    assert "callable(controller.validate_motion_envelope)" in body
     assert "shutil.which('f1-controller')" in body
     assert "F1_ROBOT_CONTROLLER_PACKAGE_URL" not in body
+    assert "Controller 0.2.0" not in _read(INSTALL_SCRIPT)
 
 
 def test_thor_dockerfile_has_simplified_layer_contract() -> None:
@@ -183,6 +186,8 @@ def test_thor_dockerfile_has_simplified_layer_contract() -> None:
     assert not re.search(
         r"(?:ros2\s+launch|ros2\s+run|topic\s+pub|service\s+call)", text
     )
+    assert "f1_robot_controller.__version__" not in text
+    assert "callable(f1_robot_controller.create_controller)" in text
 
 
 def test_thor_dockerfile_keeps_dependency_layers_source_stable() -> None:

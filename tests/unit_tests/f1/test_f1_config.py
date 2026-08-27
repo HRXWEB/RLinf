@@ -123,8 +123,8 @@ def test_f1_dataset_validator_has_no_artifact_provenance_requirements() -> None:
     assert [term for term in forbidden if term in text] == []
 
 
-def test_f1_docs_describe_simplified_runtime_contract() -> None:
-    """EN/ZH F1 docs describe the final Controller 0.2.0 workflow."""
+def test_f1_docs_describe_the_public_training_workflow() -> None:
+    """EN/ZH F1 docs describe the supported training workflow."""
 
     combined = "\n".join(path.read_text(encoding="utf-8") for path in F1_DOCS)
     required_terms = (
@@ -137,16 +137,34 @@ def test_f1_docs_describe_simplified_runtime_contract() -> None:
         "RLINF_NODE_RANK=1",
         "ray start",
         "examples/embodiment/train_async.py",
-        "realworld_dummy_f1_peg_sac_cnn_async",
         "realworld_f1_peg_rlpd_cnn_async",
-        "operator confirmation",
         "OmegaConf.to_container",
         "temporary controller JSON",
         "临时 controller JSON",
+        "demo_buffer.load_path",
+        "~algorithm.demo_buffer",
+        "algorithm.demo_fraction=0.0",
+        "requirements/install.sh f1-realworld",
+        "F1_ROBOT_CONTROLLER_PACKAGE",
     )
 
     missing = [term for term in required_terms if term not in combined]
     assert missing == []
+
+
+def test_f1_public_docs_exclude_development_only_workflows() -> None:
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in F1_DOCS)
+    forbidden = (
+        "smoke",
+        "pending",
+        "supervised-online",
+        "operator confirmation",
+        "realworld_dummy_f1_peg_sac_cnn_async",
+        "max_num_steps=1",
+    )
+
+    matches = [term for term in forbidden if term.lower() in combined.lower()]
+    assert matches == []
 
 
 def test_f1_docs_exclude_deleted_runtime_gates_and_path_envs() -> None:

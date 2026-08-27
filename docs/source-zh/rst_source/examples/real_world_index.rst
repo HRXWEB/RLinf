@@ -1,7 +1,7 @@
 真实机器人强化学习
 ========================================
 
-当你的出发点是真实机器人硬件时，请使用本节。如果你使用 Franka 机械臂或 Franka-based rig，请从 Franka 开始；GimArm、XSquare Turtle2 和 Dexmal DOS-W1 请进入对应机器人页面。
+当你的出发点是真实机器人硬件时，请使用本节。如果你使用 Franka 机械臂或 Franka-based rig，请从 Franka 开始；GimArm、XSquare Turtle2、Dexmal DOS-W1 和 F1 请进入对应机器人页面。
 
 每个章节都给出遥操作、数据采集、Sim-to-Real 迁移、部署或在线 RL 所需的配置路径。
 
@@ -50,13 +50,12 @@
        </p>
      </div>
      <div style="flex: 1 1 30%; max-width: 300px; text-align: center;">
-       <a href="embodied/f1.html" style="display: block;"><img src="https://raw.githubusercontent.com/RLinf/misc/main/pic/xsquare_turtle2_arm_small.jpg"
-            style="width: 100%; height: 200px; object-fit: cover; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.15);" /></a>
+       <a href="embodied/f1.html" style="display: flex; width: 100%; height: 200px; align-items: center; justify-content: center; border-radius: 8px; background: #eef2f7; box-shadow: 0 2px 6px rgba(0,0,0,0.15); font-size: 48px; font-weight: 600; color: #344054;">F1</a>
        <p style="margin-top: 8px; font-size: 14px; line-height: 1.4;">
          <a href="embodied/f1.html" style="text-decoration: underline; color: blue;">
            <b>F1</b>
          </a><br>
-         为 F1 双臂插 peg 准备 pending supervised-online SAC/RLPD handoff
+         为 F1 双臂插销任务训练 SAC 或 RLPD 策略
        </p>
      </div>
 

@@ -19,7 +19,7 @@ connect RLinf to physical hardware.
    * - :doc:`Real-World Robots <../realworld_robot>`
      - Run RL on physical robot hardware.
    * - :doc:`F1 Two-Node Runtime <../f1_runtime>`
-     - Reproduce the GPU-host and ARM64 Thor environments for F1.
+     - Reproduce the F1 GPU-host and ARM64 robot-side environments (validated on NVIDIA Thor).
 
 .. toctree::
    :hidden:

@@ -18,7 +18,7 @@
    * - :doc:`真机机器人 <../realworld_robot>`
      - 在真实机器人硬件上运行 RL。
    * - :doc:`F1 双节点运行环境 <../f1_runtime>`
-     - 复现 F1 的 GPU 宿主机与 ARM64 Thor 环境。
+     - 复现 F1 的 GPU 宿主机与 ARM64 机器人侧环境（已在 NVIDIA Thor 上验证）。
 
 .. toctree::
    :hidden:
