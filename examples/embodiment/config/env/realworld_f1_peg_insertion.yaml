@@ -13,11 +13,6 @@ max_steps_per_rollout_epoch: 10
 max_episode_steps: 10
 use_spacemouse: false
 main_image_key: head_color
-state_order:
-  - left_joint_position
-  - left_gripper
-  - right_joint_position
-  - right_gripper
 
 video_cfg:
   save_video: false

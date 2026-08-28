@@ -40,12 +40,6 @@ CONFIG_NAME = "realworld_dummy_f1_peg_sac_cnn_async"
 REAL_CONFIG_NAME = "realworld_f1_peg_rlpd_cnn_async"
 ENV_ID = "F1DualArmPegInsertionEnv-v1"
 LEGACY_ENV_ID = "F1DualArmPegInsertionEnv-v0"
-F1_STATE_ORDER = [
-    "left_joint_position",
-    "left_gripper",
-    "right_joint_position",
-    "right_gripper",
-]
 FORBIDDEN_RUNTIME_TERMS = (
     "phase2_handoff",
     "gate_1_status",
@@ -394,7 +388,7 @@ def test_hydra_composes_the_f1_train_and_eval_contract(
         assert section.max_episode_steps == 10
         assert section.max_steps_per_rollout_epoch == 10
         assert section.main_image_key == "head_color"
-        assert list(section.state_order) == F1_STATE_ORDER
+        assert "state_order" not in section
         assert section.override_cfg.controller.backend == "fake"
         assert section.override_cfg.action_scale.tcp_position_m == pytest.approx(0.005)
         assert section.override_cfg.action_scale.tcp_orientation_deg == pytest.approx(

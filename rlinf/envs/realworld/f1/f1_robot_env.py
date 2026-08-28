@@ -38,6 +38,7 @@ from f1_robot_controller import (
     load_controller_config,
     validate_motion_envelope,
 )
+from PIL import Image
 
 F1_STATE_ORDER = (
     "left_joint_position",
@@ -102,6 +103,7 @@ class F1RobotConfig:
     tcp_position_tolerance_m: float = 0.005
     tcp_orientation_tolerance_deg: float = 1.0
     gripper_tolerance_percent_closed: float = 1.0
+    policy_image_shape: tuple[int, int] = (128, 128)
     control_period_s: float = field(default=0.01, init=False)
     max_observation_age_s: float = field(default=0.25, init=False)
     max_observation_skew_s: float = field(default=0.05, init=False)
@@ -133,6 +135,14 @@ class F1RobotConfig:
             "gripper_tolerance_percent_closed",
             self.gripper_tolerance_percent_closed,
         )
+        if (
+            not isinstance(self.policy_image_shape, (list, tuple))
+            or len(self.policy_image_shape) != 2
+        ):
+            raise ValueError("policy_image_shape must be [height, width]")
+        self.policy_image_shape = tuple(int(dim) for dim in self.policy_image_shape)
+        if any(dim <= 0 for dim in self.policy_image_shape):
+            raise ValueError("policy_image_shape dimensions must be positive")
         if not isinstance(self.controller, Mapping):
             raise TypeError("controller must be an inline mapping")
         if not isinstance(self.motion_envelope, Mapping):
@@ -219,7 +229,6 @@ class F1RobotEnv(gym.Env):
         super().__init__()
         self.config = config
         self._motion_envelope = config.motion_envelope
-        self._frame_shapes = self._configured_frame_shapes(config)
         action_low = np.full(14, -1.0, dtype=np.float32)
         action_high = np.full(14, 1.0, dtype=np.float32)
         self.action_space = gym.spaces.Box(
@@ -231,25 +240,18 @@ class F1RobotEnv(gym.Env):
         self.observation_space = gym.spaces.Dict(
             {
                 "state": gym.spaces.Dict(
-                    OrderedDict(
-                        (
-                            ("left_joint_position", self._float_vector_space(7)),
-                            ("left_gripper", self._gripper_space()),
-                            ("right_joint_position", self._float_vector_space(7)),
-                            ("right_gripper", self._gripper_space()),
-                        )
-                    )
+                    OrderedDict((("proprio", self._float_vector_space(16)),))
                 ),
                 "frames": gym.spaces.Dict(
                     {
                         "head_color": self._rgb_frame_space(
-                            self._frame_shapes["head_color"]
+                            (*config.policy_image_shape, 3)
                         ),
                         "left_wrist_color": self._rgb_frame_space(
-                            self._frame_shapes["left_wrist_color"]
+                            (*config.policy_image_shape, 3)
                         ),
                         "right_wrist_color": self._rgb_frame_space(
-                            self._frame_shapes["right_wrist_color"]
+                            (*config.policy_image_shape, 3)
                         ),
                     }
                 ),
@@ -286,15 +288,6 @@ class F1RobotEnv(gym.Env):
         )
 
     @staticmethod
-    def _gripper_space() -> gym.spaces.Box:
-        return gym.spaces.Box(
-            low=0.0,
-            high=100.0,
-            shape=(1,),
-            dtype=np.float32,
-        )
-
-    @staticmethod
     def _rgb_frame_space(shape: tuple[int, int, int]) -> gym.spaces.Box:
         return gym.spaces.Box(
             low=0,
@@ -302,60 +295,6 @@ class F1RobotEnv(gym.Env):
             shape=shape,
             dtype=np.uint8,
         )
-
-    @staticmethod
-    def _validated_frame_shape(value: object, name: str) -> tuple[int, int, int]:
-        if not isinstance(value, (list, tuple)) or len(value) != 3:
-            raise ValueError(f"{name} must be an HxWx3 image shape")
-        shape = tuple(int(dim) for dim in value)
-        if any(dim <= 0 for dim in shape) or shape[2] != 3:
-            raise ValueError(f"{name} must be an HxWx3 image shape")
-        return shape
-
-    @classmethod
-    def _configured_frame_shapes(
-        cls, config: F1RobotConfig
-    ) -> dict[str, tuple[int, int, int]]:
-        default_shape = (128, 128, 3)
-        controller = config.controller
-        backend = controller.get("backend")
-        if backend == "fake":
-            fake = controller.get("fake")
-            if isinstance(fake, Mapping):
-                height = fake.get("image_height", default_shape[0])
-                width = fake.get("image_width", default_shape[1])
-                return {
-                    "head_color": cls._validated_frame_shape(
-                        (height, width, 3), "head_color"
-                    ),
-                    "left_wrist_color": cls._validated_frame_shape(
-                        (height, width, 3), "left_wrist_color"
-                    ),
-                    "right_wrist_color": cls._validated_frame_shape(
-                        (height, width, 3), "right_wrist_color"
-                    ),
-                }
-            return {
-                "head_color": default_shape,
-                "left_wrist_color": default_shape,
-                "right_wrist_color": default_shape,
-            }
-        ros2 = controller.get("ros2")
-        if not isinstance(ros2, Mapping) or not isinstance(
-            ros2.get("image_shapes"), Mapping
-        ):
-            return {
-                "head_color": default_shape,
-                "left_wrist_color": default_shape,
-                "right_wrist_color": default_shape,
-            }
-        image_shapes = cls._require_nonempty_mapping(
-            ros2.get("image_shapes"), "image_shapes"
-        )
-        return {
-            role: cls._validated_frame_shape(image_shapes.get(role), role)
-            for role in ("head_color", "left_wrist_color", "right_wrist_color")
-        }
 
     @property
     def _active_controller(self) -> F1RobotController:
@@ -385,67 +324,45 @@ class F1RobotEnv(gym.Env):
             raise ValueError(f"{name} is required")
         return value
 
-    @staticmethod
-    def _require_nonempty_mapping(value: object, name: str) -> Mapping[str, Any]:
-        mapping = F1RobotEnv._require_mapping(value, name)
-        if not mapping:
-            raise ValueError(f"{name} is required")
-        return mapping
-
-    @staticmethod
-    def _policy_observation(observation: RobotObservation) -> dict[str, Any]:
+    def _policy_observation(self, observation: RobotObservation) -> dict[str, Any]:
         return {
-            "state": {
-                "left_joint_position": np.array(
-                    observation.left_joint_position_rad,
-                    dtype=np.float32,
-                    copy=True,
-                ),
-                "left_gripper": np.array(
-                    [observation.left_gripper_position],
-                    dtype=np.float32,
-                ),
-                "right_joint_position": np.array(
-                    observation.right_joint_position_rad,
-                    dtype=np.float32,
-                    copy=True,
-                ),
-                "right_gripper": np.array(
-                    [observation.right_gripper_position],
-                    dtype=np.float32,
-                ),
-            },
+            "state": {"proprio": self._state_vector(observation).astype(np.float32)},
             "frames": {
-                "head_color": np.array(
-                    observation.head_color_rgb,
-                    dtype=np.uint8,
-                    copy=True,
+                "head_color": self._resize_policy_image(observation.head_color_rgb),
+                "left_wrist_color": self._resize_policy_image(
+                    observation.left_wrist_color_rgb
                 ),
-                "left_wrist_color": np.array(
-                    observation.left_wrist_color_rgb,
-                    dtype=np.uint8,
-                    copy=True,
-                ),
-                "right_wrist_color": np.array(
-                    observation.right_wrist_color_rgb,
-                    dtype=np.uint8,
-                    copy=True,
+                "right_wrist_color": self._resize_policy_image(
+                    observation.right_wrist_color_rgb
                 ),
             },
         }
+
+    def _resize_policy_image(self, image: np.ndarray) -> np.ndarray:
+        target_height, target_width = self.config.policy_image_shape
+        image = np.asarray(image, dtype=np.uint8)
+        if image.shape == (target_height, target_width, 3):
+            return np.array(image, copy=True)
+        resized = Image.fromarray(image).resize(
+            (target_width, target_height),
+            resample=Image.Resampling.BILINEAR,
+        )
+        return np.array(resized, dtype=np.uint8, copy=True)
 
     @staticmethod
     def _state_vector(observation: RobotObservation) -> np.ndarray:
         """Return the canonical 16D joint/gripper state vector."""
 
-        policy_observation = F1RobotEnv._policy_observation(observation)
-        state = policy_observation["state"]
         return np.array(
             [
-                *np.asarray(state["left_joint_position"], dtype=np.float64).tolist(),
-                float(state["left_gripper"][0]),
-                *np.asarray(state["right_joint_position"], dtype=np.float64).tolist(),
-                float(state["right_gripper"][0]),
+                *np.asarray(
+                    observation.left_joint_position_rad, dtype=np.float64
+                ).tolist(),
+                float(observation.left_gripper_position),
+                *np.asarray(
+                    observation.right_joint_position_rad, dtype=np.float64
+                ).tolist(),
+                float(observation.right_gripper_position),
             ],
             dtype=np.float64,
         )

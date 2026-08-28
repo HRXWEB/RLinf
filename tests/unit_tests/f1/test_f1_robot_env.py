@@ -364,93 +364,6 @@ def _install_recording_controller(
     return factory_call
 
 
-def _load_realworld_env_class(
-    monkeypatch: pytest.MonkeyPatch,
-) -> type:
-    """Load RealWorldEnv without importing RLinf's unrelated heavy stack."""
-
-    torch_stub = ModuleType("torch")
-    torch_stub.Tensor = type("Tensor", (), {})
-    monkeypatch.setitem(sys.modules, "torch", torch_stub)
-
-    psutil_stub = ModuleType("psutil")
-    psutil_stub.process_iter = lambda: []
-    monkeypatch.setitem(sys.modules, "psutil", psutil_stub)
-
-    filelock_stub = ModuleType("filelock")
-    filelock_stub.FileLock = type("FileLock", (), {})
-    monkeypatch.setitem(sys.modules, "filelock", filelock_stub)
-
-    class OmegaConfStub:
-        @staticmethod
-        def create(value: object) -> object:
-            return value
-
-        @staticmethod
-        def to_container(value: object, *, resolve: bool) -> object:
-            del resolve
-            return value
-
-        @staticmethod
-        def register_resolver(*args: object, **kwargs: object) -> None:
-            del args, kwargs
-
-        @staticmethod
-        def register_new_resolver(*args: object, **kwargs: object) -> None:
-            del args, kwargs
-
-    omegaconf_stub = ModuleType("omegaconf")
-    omegaconf_stub.OmegaConf = OmegaConfStub
-    monkeypatch.setitem(sys.modules, "omegaconf", omegaconf_stub)
-
-    venv_stub = ModuleType("rlinf.envs.realworld.venv")
-    venv_stub.NoAutoResetSyncVectorEnv = type("NoAutoResetSyncVectorEnv", (), {})
-    monkeypatch.setitem(sys.modules, "rlinf.envs.realworld.venv", venv_stub)
-
-    utils_stub = ModuleType("rlinf.envs.utils")
-    utils_stub.to_tensor = lambda value: value
-    monkeypatch.setitem(sys.modules, "rlinf.envs.utils", utils_stub)
-
-    scheduler_stub = ModuleType("rlinf.scheduler")
-    scheduler_stub.WorkerInfo = object
-    monkeypatch.setitem(sys.modules, "rlinf.scheduler", scheduler_stub)
-
-    module_path = ROOT / "rlinf" / "envs" / "realworld" / "realworld_env.py"
-    spec = importlib.util.spec_from_file_location(
-        "_realworld_env_under_test", module_path
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError("could not load RealWorldEnv")
-    module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, spec.name, module)
-    spec.loader.exec_module(module)
-    return module.RealWorldEnv
-
-
-def _raw_realworld_observation() -> dict[str, object]:
-    return {
-        "state": {
-            "right_gripper": np.array([[16.0]], dtype=np.float32),
-            "left_gripper": np.array([[8.0]], dtype=np.float32),
-            "right_joint_position": np.arange(9, 16, dtype=np.float32)[None, :],
-            "left_joint_position": np.arange(1, 8, dtype=np.float32)[None, :],
-        },
-        "frames": {
-            "head_color": np.zeros((1, 128, 128, 3), dtype=np.uint8),
-        },
-    }
-
-
-def _raw_heterogeneous_realworld_observation() -> dict[str, object]:
-    observation = _raw_realworld_observation()
-    observation["frames"] = {
-        "head_color": np.zeros((1, 720, 1280, 3), dtype=np.uint8),
-        "left_wrist_color": np.ones((1, 480, 848, 3), dtype=np.uint8),
-        "right_wrist_color": np.full((1, 480, 848, 3), 2, dtype=np.uint8),
-    }
-    return observation
-
-
 def test_f1_robot_config_has_the_frozen_phase_one_defaults() -> None:
     config = _f1_config()
 
@@ -467,6 +380,7 @@ def test_f1_robot_config_has_the_frozen_phase_one_defaults() -> None:
         "tcp_position_tolerance_m": 0.005,
         "tcp_orientation_tolerance_deg": 1.0,
         "gripper_tolerance_percent_closed": 1.0,
+        "policy_image_shape": (128, 128),
         "control_period_s": 0.001,
         "max_observation_age_s": 0.25,
         "max_observation_skew_s": 0.05,
@@ -504,6 +418,8 @@ def test_f1_robot_config_has_the_frozen_phase_one_defaults() -> None:
         {"tcp_position_tolerance_m": 0.0},
         {"tcp_orientation_tolerance_deg": 0.0},
         {"gripper_tolerance_percent_closed": 0.0},
+        {"policy_image_shape": (0, 128)},
+        {"policy_image_shape": "128x128"},
         {"motion_envelope": object()},
     ],
 )
@@ -528,162 +444,44 @@ def test_f1_robot_config_validates_and_copies_the_motion_envelope() -> None:
     assert config.controller["motion_envelope"] == _approved_motion_envelope()
 
 
-def test_f1_exports_and_uses_the_canonical_state_order() -> None:
+def test_f1_exposes_one_canonical_policy_state_vector() -> None:
     assert F1_PACKAGE.F1_STATE_ORDER == EXPECTED_F1_STATE_ORDER
 
     env = F1RobotEnv(_f1_config())
     try:
-        assert tuple(env.observation_space["state"].spaces) == EXPECTED_F1_STATE_ORDER
+        state_space = env.observation_space["state"]
+        assert tuple(state_space.spaces) == ("proprio",)
+        assert state_space["proprio"].shape == (16,)
     finally:
         env.close()
 
 
-def test_realworld_wrap_obs_flattens_the_configured_canonical_state_order(
+def test_f1_normalizes_policy_state_and_heterogeneous_images_before_public_wrapper(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    realworld_env_class = _load_realworld_env_class(monkeypatch)
-    env = realworld_env_class.__new__(realworld_env_class)
-    env.main_image_key = "head_color"
-    env.task_descriptions = ["task"]
-    env.state_order = EXPECTED_F1_STATE_ORDER
-
-    observation = env._wrap_obs(_raw_realworld_observation())
-
-    np.testing.assert_array_equal(
-        observation["states"],
-        np.arange(1, 17, dtype=np.float32)[None, :],
+    raw = _robot_observation(
+        left_joints=np.arange(1, 8, dtype=np.float64),
+        left_gripper=8.0,
+        right_joints=np.arange(9, 16, dtype=np.float64),
+        right_gripper=16.0,
     )
-
-
-def test_realworld_wrap_obs_rejects_state_order_that_is_not_an_exact_key_match(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    realworld_env_class = _load_realworld_env_class(monkeypatch)
-    env = realworld_env_class.__new__(realworld_env_class)
-    env.main_image_key = "head_color"
-    env.task_descriptions = ["task"]
-    env.state_order = EXPECTED_F1_STATE_ORDER[:-1] + ("unexpected",)
-
-    with pytest.raises(ValueError, match="state_order"):
-        env._wrap_obs(_raw_realworld_observation())
-
-
-def test_realworld_wrap_obs_without_state_order_keeps_sorted_legacy_behavior(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    realworld_env_class = _load_realworld_env_class(monkeypatch)
-    env = realworld_env_class.__new__(realworld_env_class)
-    env.main_image_key = "head_color"
-    env.task_descriptions = ["task"]
-    env.state_order = None
-
-    observation = env._wrap_obs(_raw_realworld_observation())
-
-    np.testing.assert_array_equal(
-        observation["states"],
-        np.array([[8.0, *range(1, 8), 16.0, *range(9, 16)]], dtype=np.float32),
-    )
-
-
-def test_realworld_wrap_obs_resizes_heterogeneous_f1_raw_images_for_policy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    realworld_env_class = _load_realworld_env_class(monkeypatch)
-    env = realworld_env_class.__new__(realworld_env_class)
-    env.main_image_key = "head_color"
-    env.task_descriptions = ["task"]
-    env.state_order = EXPECTED_F1_STATE_ORDER
-    env.policy_image_shape = (128, 128)
-
-    observation = env._wrap_obs(_raw_heterogeneous_realworld_observation())
-
-    assert tuple(observation["main_images"].shape) == (1, 128, 128, 3)
-    assert tuple(observation["extra_view_images"].shape) == (1, 2, 128, 128, 3)
-    assert observation["main_images"].dtype == np.uint8
-    assert observation["extra_view_images"].dtype == np.uint8
-
-
-def test_realworld_env_reads_optional_state_order_from_top_level_config(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    realworld_env_class = _load_realworld_env_class(monkeypatch)
-
-    def fake_init_env(env: object) -> None:
-        state_spaces = {
-            key: gym.spaces.Box(-1.0, 1.0, shape=(1,), dtype=np.float32)
-            for key in EXPECTED_F1_STATE_ORDER
-        }
-        env.env = SimpleNamespace(
-            single_observation_space=gym.spaces.Dict(
-                {"state": gym.spaces.Dict(state_spaces)}
-            )
+    raw.head_color_rgb = np.zeros((720, 1280, 3), dtype=np.uint8)
+    raw.left_wrist_color_rgb = np.full((480, 848, 3), 1, dtype=np.uint8)
+    raw.right_wrist_color_rgb = np.full((480, 848, 3), 2, dtype=np.uint8)
+    controller = RecordingController(raw)
+    _install_recording_controller(monkeypatch, controller)
+    env = F1RobotEnv(_f1_config())
+    try:
+        observation, _ = env.reset()
+        np.testing.assert_array_equal(
+            observation["state"]["proprio"],
+            np.arange(1, 17, dtype=np.float32),
         )
-        env.task_descriptions = ["task"]
-
-    monkeypatch.setattr(realworld_env_class, "_init_env", fake_init_env)
-    monkeypatch.setattr(realworld_env_class, "_init_metrics", lambda self: None)
-    monkeypatch.setattr(
-        realworld_env_class,
-        "_init_reset_state_ids",
-        lambda self: None,
-    )
-    cfg = SimpleNamespace(
-        override_cfg={},
-        video_cfg={},
-        seed=1,
-        use_fixed_reset_state_ids=False,
-        auto_reset=False,
-        ignore_terminations=False,
-        group_size=1,
-        main_image_key="head_color",
-        state_order=list(EXPECTED_F1_STATE_ORDER),
-    )
-    cfg.get = lambda name, default=None: getattr(cfg, name, default)
-
-    env = realworld_env_class(cfg, 1, 0, 1, None)
-
-    assert env.state_order == EXPECTED_F1_STATE_ORDER
-
-
-def test_realworld_env_rejects_configured_state_order_during_construction(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    realworld_env_class = _load_realworld_env_class(monkeypatch)
-
-    def fake_init_env(env: object) -> None:
-        state_spaces = {
-            key: gym.spaces.Box(-1.0, 1.0, shape=(1,), dtype=np.float32)
-            for key in EXPECTED_F1_STATE_ORDER
-        }
-        env.env = SimpleNamespace(
-            single_observation_space=gym.spaces.Dict(
-                {"state": gym.spaces.Dict(state_spaces)}
-            )
+        assert all(
+            frame.shape == (128, 128, 3) for frame in observation["frames"].values()
         )
-        env.task_descriptions = ["task"]
-
-    monkeypatch.setattr(realworld_env_class, "_init_env", fake_init_env)
-    monkeypatch.setattr(realworld_env_class, "_init_metrics", lambda self: None)
-    monkeypatch.setattr(
-        realworld_env_class,
-        "_init_reset_state_ids",
-        lambda self: None,
-    )
-    cfg = SimpleNamespace(
-        override_cfg={},
-        video_cfg={},
-        seed=1,
-        use_fixed_reset_state_ids=False,
-        auto_reset=False,
-        ignore_terminations=False,
-        group_size=1,
-        main_image_key="head_color",
-        state_order=["left_joint_position"],
-    )
-    cfg.get = lambda name, default=None: getattr(cfg, name, default)
-
-    with pytest.raises(ValueError, match="state_order"):
-        realworld_env_class(cfg, 1, 0, 1, None)
+    finally:
+        env.close()
 
 
 def test_f1_robot_env_exposes_14d_tcp_action_16d_state_and_three_rgb_frames() -> None:
@@ -696,16 +494,9 @@ def test_f1_robot_env_exposes_14d_tcp_action_16d_state_and_three_rgb_frames() ->
         np.testing.assert_allclose(env.action_space.high, [1.0] * 14)
 
         state_space = env.observation_space["state"]
-        assert tuple(state_space.spaces) == EXPECTED_F1_STATE_ORDER
+        assert tuple(state_space.spaces) == ("proprio",)
         assert sum(space.shape[0] for space in state_space.spaces.values()) == 16
-        assert state_space["left_joint_position"].shape == (7,)
-        assert state_space["left_gripper"].shape == (1,)
-        assert state_space["left_gripper"].low[0] == 0.0
-        assert state_space["left_gripper"].high[0] == 100.0
-        assert state_space["right_joint_position"].shape == (7,)
-        assert state_space["right_gripper"].shape == (1,)
-        assert state_space["right_gripper"].low[0] == 0.0
-        assert state_space["right_gripper"].high[0] == 100.0
+        assert state_space["proprio"].shape == (16,)
 
         frame_space = env.observation_space["frames"]
         assert set(frame_space.spaces) == {
@@ -1093,7 +884,7 @@ def test_step_returns_copies_of_controller_observation_buffers(
         observation, *_ = env.step(np.zeros(14, dtype=np.float32))
         controller_observation = controller.observation
 
-        observation["state"]["left_joint_position"].fill(99.0)
+        observation["state"]["proprio"].fill(99.0)
         observation["frames"]["head_color"].fill(255)
 
         assert not np.any(controller_observation.left_joint_position_rad == 99.0)
@@ -1279,8 +1070,7 @@ def test_reset_uses_current_measured_state_as_session_origin(
         assert info["session_origin_state"].shape == (16,)
         np.testing.assert_allclose(
             info["session_origin_state"][:8],
-            observation["state"]["left_joint_position"].tolist()
-            + [observation["state"]["left_gripper"][0]],
+            observation["state"]["proprio"][:8],
         )
         assert [event[0] for event in controller.events] == [
             "open",

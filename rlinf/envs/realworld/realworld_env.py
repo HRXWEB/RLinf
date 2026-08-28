@@ -20,7 +20,7 @@ import os
 import pathlib
 import time
 from functools import partial
-from typing import TYPE_CHECKING, OrderedDict
+from typing import OrderedDict
 
 import gymnasium as gym
 import numpy as np
@@ -31,9 +31,6 @@ from omegaconf import OmegaConf
 
 from rlinf.envs.realworld.venv import NoAutoResetSyncVectorEnv
 from rlinf.envs.utils import to_tensor
-
-if TYPE_CHECKING:
-    from rlinf.scheduler import WorkerInfo
 
 
 class RealWorldEnv(gym.Env):
@@ -59,34 +56,11 @@ class RealWorldEnv(gym.Env):
         self.num_group = num_envs // cfg.group_size
         self.group_size = cfg.group_size
         self.main_image_key = cfg.main_image_key
-        policy_image_shape = cfg.get("policy_image_shape", (128, 128))
-        if (
-            not isinstance(policy_image_shape, (list, tuple))
-            or len(policy_image_shape) != 2
-        ):
-            raise ValueError("policy_image_shape must be [height, width]")
-        self.policy_image_shape = tuple(int(dim) for dim in policy_image_shape)
-        if any(dim <= 0 for dim in self.policy_image_shape):
-            raise ValueError("policy_image_shape dimensions must be positive")
-        configured_state_order = cfg.get("state_order", None)
-        if configured_state_order is None:
-            self.state_order = None
-        else:
-            if isinstance(configured_state_order, (str, bytes)):
-                raise ValueError("state_order must be a sequence of unique keys")
-            self.state_order = tuple(configured_state_order)
-            if not all(isinstance(key, str) for key in self.state_order):
-                raise ValueError("state_order keys must be strings")
-            if len(self.state_order) != len(set(self.state_order)):
-                raise ValueError("state_order must contain unique keys")
         self.manual_episode_control_only = bool(
             self.override_cfg.get("manual_episode_control_only", False)
         )
 
         self._init_env()
-        if self.state_order is not None:
-            state_space = self.env.single_observation_space["state"]
-            self._validate_configured_state_order(state_space.spaces)
 
         self._is_start = True
         self._init_metrics()
@@ -129,16 +103,17 @@ class RealWorldEnv(gym.Env):
 
     @staticmethod
     def realworld_setup():
-        """Perform legacy RealWorld node setup before constructing a legacy task.
+        """Setup RealWorld environment upon env class import.
 
         This is for any node-level setup required by RealWorld environments. For example, ROS
         requires a single roscore instance per node, so we ensure that any existing roscore
         processes are terminated before starting a new one.
 
-        This function is called once per process when a legacy task is selected.
+        This function is called once when the RealWorldEnv class is first imported.
         """
-        # Concurrency control is needed for multiple processes on the same node.
+        # Concurrency control is needed for multiple processes on the same node
         node_lock_file = "/tmp/.realworld.lock"
+        # Check if the path is valid
         if not os.path.exists(os.path.dirname(node_lock_file)):
             node_lock_file = os.path.join(pathlib.Path.home(), ".realworld.lock")
         node_lock = FileLock(node_lock_file)
@@ -257,12 +232,7 @@ class RealWorldEnv(gym.Env):
         obs = {}
 
         state = raw_obs["state"]
-        if self.state_order is None:
-            state_keys = sorted(state)
-        else:
-            self._validate_configured_state_order(state)
-            state_keys = self.state_order
-        full_states = np.concatenate([state[k] for k in state_keys], axis=-1)
+        full_states = np.concatenate([state[k] for k in sorted(state)], axis=-1)
         obs["states"] = full_states
 
         frames = raw_obs["frames"]
@@ -270,35 +240,16 @@ class RealWorldEnv(gym.Env):
             raise KeyError(
                 f"main_image_key {self.main_image_key!r} not in {list(frames)}"
             )
-        obs["main_images"] = self._resize_policy_images(frames[self.main_image_key])
+        obs["main_images"] = frames[self.main_image_key]
         raw_images = OrderedDict(sorted(frames.items()))
         raw_images.pop(self.main_image_key)
 
         if raw_images:
-            obs["extra_view_images"] = np.stack(
-                [self._resize_policy_images(image) for image in raw_images.values()],
-                axis=1,
-            )
+            obs["extra_view_images"] = np.stack(list(raw_images.values()), axis=1)
 
         obs = to_tensor(obs)
         obs["task_descriptions"] = self.task_descriptions
         return obs
-
-    def _resize_policy_images(self, images):
-        target_h, target_w = getattr(self, "policy_image_shape", (128, 128))
-        if images.shape[1:3] == (target_h, target_w):
-            return images
-        row_idx = np.linspace(0, images.shape[1] - 1, target_h).astype(np.int64)
-        col_idx = np.linspace(0, images.shape[2] - 1, target_w).astype(np.int64)
-        return images[:, row_idx][:, :, col_idx].astype(images.dtype, copy=False)
-
-    def _validate_configured_state_order(self, state_keys):
-        if len(self.state_order) != len(state_keys) or set(self.state_order) != set(
-            state_keys
-        ):
-            raise ValueError(
-                "configured state_order must exactly match observation state keys"
-            )
 
     def step(self, actions=None, auto_reset=True):
         if isinstance(actions, torch.Tensor):
