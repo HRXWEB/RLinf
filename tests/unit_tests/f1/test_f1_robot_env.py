@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import importlib.util
+import inspect
 import sys
 from collections.abc import Mapping
 from dataclasses import asdict
@@ -59,8 +60,34 @@ def _load_f1_package() -> ModuleType:
 
 F1_PACKAGE = _load_f1_package()
 F1RobotConfig = F1_PACKAGE.F1RobotConfig
-F1RobotEnv = F1_PACKAGE.F1RobotEnv
+F1RobotEnvBase = F1_PACKAGE.F1RobotEnv
 F1_ENV_MODULE = sys.modules["_f1_env_under_test.f1_robot_env"]
+
+
+class F1RobotEnv(F1RobotEnvBase):
+    """Concrete task double for exercising the F1 platform template."""
+
+    task_reset_options: dict[str, Any] | None = None
+
+    @property
+    def task_description(self) -> str:
+        return "F1 platform test task"
+
+    def _reset_task(self, *, options: dict[str, Any] | None) -> dict[str, Any]:
+        self.task_reset_options = options
+        events = getattr(self._active_controller, "events", None)
+        if events is not None:
+            events.append(("reset_task", options))
+        return {"reset_mode": "current_state_origin"}
+
+    def _calc_step_reward(self, observation: dict[str, Any]) -> float:
+        del observation
+        return 0.0
+
+    def _is_success(self, observation: dict[str, Any]) -> bool:
+        del observation
+        return False
+
 
 EXPECTED_F1_STATE_ORDER = (
     "left_joint_position",
@@ -401,6 +428,16 @@ def test_f1_robot_config_has_the_frozen_phase_one_defaults() -> None:
             1.0,
         ),
     }
+
+
+def test_f1_robot_env_requires_concrete_task_interfaces() -> None:
+    assert inspect.isabstract(F1RobotEnvBase)
+    assert {
+        "task_description",
+        "_reset_task",
+        "_calc_step_reward",
+        "_is_success",
+    } <= F1RobotEnvBase.__abstractmethods__
 
 
 @pytest.mark.parametrize(
@@ -1085,7 +1122,7 @@ def test_reset_uses_current_measured_state_as_session_origin(
     )
     try:
         controller.events.clear()
-        observation, info = env.reset(seed=7)
+        observation, info = env.reset(seed=7, options={"operator": "ready"})
 
         assert controller.policy_commands == []
         assert controller.reset_commands == []
@@ -1093,6 +1130,7 @@ def test_reset_uses_current_measured_state_as_session_origin(
         assert controller.read_requests[-1]["newer_than"] is None
         assert env.observation_space.contains(observation)
         assert info["reset_mode"] == "current_state_origin"
+        assert env.task_reset_options == {"operator": "ready"}
         assert info["session_origin_state"].shape == (16,)
         np.testing.assert_allclose(
             info["session_origin_state"][:8],
@@ -1102,6 +1140,7 @@ def test_reset_uses_current_measured_state_as_session_origin(
             "open",
             "wait_ready",
             "health",
+            "reset_task",
             "read_observation",
         ]
     finally:
@@ -1250,6 +1289,7 @@ def test_reset_does_not_stop_previous_motion_before_reading_origin(
             "open",
             "wait_ready",
             "health",
+            "reset_task",
             "read_observation",
         ]
         assert controller.reset_commands == []

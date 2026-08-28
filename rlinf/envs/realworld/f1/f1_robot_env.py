@@ -14,6 +14,7 @@
 
 """Platform-level Gymnasium environment for the F1 dual-arm robot."""
 
+from abc import ABC, abstractmethod
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from copy import deepcopy
@@ -208,7 +209,7 @@ class F1RobotConfig:
         return np.array(self._action_scale_vector, dtype=np.float64)
 
 
-class F1RobotEnv(gym.Env):
+class F1RobotEnv(gym.Env, ABC):
     """Own the F1 Controller lifecycle and common action/observation schema."""
 
     metadata = {"render_modes": []}
@@ -277,6 +278,11 @@ class F1RobotEnv(gym.Env):
             controller.close()
             self._closed = True
             raise
+
+    @property
+    @abstractmethod
+    def task_description(self) -> str:
+        """Return the policy-facing instruction for the concrete task."""
 
     @staticmethod
     def _float_vector_space(size: int) -> gym.spaces.Box:
@@ -572,13 +578,13 @@ class F1RobotEnv(gym.Env):
             created_at_monotonic_s=monotonic(),
         )
 
+    @abstractmethod
     def _calc_step_reward(self, observation: dict[str, Any]) -> float:
-        del observation
-        return 0.0
+        """Compute the concrete task reward for one post-action observation."""
 
+    @abstractmethod
     def _is_success(self, observation: dict[str, Any]) -> bool:
-        del observation
-        return False
+        """Return whether the concrete task succeeded after the action."""
 
     def _require_healthy_controller(self, context: str) -> None:
         health = self._active_controller.health()
@@ -665,28 +671,37 @@ class F1RobotEnv(gym.Env):
         observation = self._read_observation()
         self._session_origin = self._state_vector(observation)
 
+    @abstractmethod
+    def _reset_task(
+        self,
+        *,
+        options: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Perform task-specific reset work and return task reset metadata."""
+
     def reset(
         self,
         *,
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Start an episode from the current measured robot state."""
+        """Run the task reset hook and start an episode from its final state."""
 
         super().reset(seed=seed)
-        del options
         controller = self._active_controller
         try:
             controller.open()
             controller.wait_ready(timeout_s=self.config.reset_timeout_s)
             self._require_healthy_controller("reset readiness check failed")
+            reset_info = self._reset_task(options=options)
+            if not isinstance(reset_info, dict):
+                raise TypeError("_reset_task must return a dict")
             measured = self._read_observation()
             self._session_origin = self._state_vector(measured)
             self._num_steps = 0
-            return self._policy_observation(measured), {
-                "reset_mode": "current_state_origin",
-                "session_origin_state": self._session_origin.copy(),
-            }
+            info = dict(reset_info)
+            info["session_origin_state"] = self._session_origin.copy()
+            return self._policy_observation(measured), info
         except BaseException as error:
             self._stop_after_failure("reset", error)
             raise

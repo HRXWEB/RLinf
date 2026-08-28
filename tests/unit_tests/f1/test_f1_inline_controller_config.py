@@ -23,6 +23,26 @@ from rlinf.envs.realworld.f1 import F1RobotConfig, F1RobotEnv  # noqa: E402
 from rlinf.envs.realworld.f1 import f1_robot_env as f1_env_module  # noqa: E402
 
 
+class ConcreteF1RobotEnv(F1RobotEnv):
+    """Minimal concrete task used by inline Controller boundary tests."""
+
+    @property
+    def task_description(self) -> str:
+        return "inline Controller test task"
+
+    def _reset_task(self, *, options: dict[str, Any] | None) -> dict[str, Any]:
+        del options
+        return {"reset_mode": "current_state_origin"}
+
+    def _calc_step_reward(self, observation: dict[str, Any]) -> float:
+        del observation
+        return 0.0
+
+    def _is_success(self, observation: dict[str, Any]) -> bool:
+        del observation
+        return False
+
+
 def valid_motion_envelope() -> dict[str, object]:
     """Return a closed Controller 0.2.0 motion envelope mapping."""
 
@@ -170,7 +190,7 @@ def test_f1_env_uses_injected_single_argument_controller_factory(
 
     monkeypatch.setattr(f1_env_module, "create_controller", controller_factory)
 
-    env = F1RobotEnv(F1RobotConfig(**valid_env_cfg()))
+    env = ConcreteF1RobotEnv(F1RobotConfig(**valid_env_cfg()))
     try:
         assert factory_calls == [env.config.controller]
         assert factory_calls[0]["motion_envelope"] == valid_motion_envelope()
@@ -179,7 +199,7 @@ def test_f1_env_uses_injected_single_argument_controller_factory(
 
 
 def test_f1_env_scales_normalized_tcp_and_gripper_action() -> None:
-    env = F1RobotEnv.__new__(F1RobotEnv)
+    env = ConcreteF1RobotEnv.__new__(ConcreteF1RobotEnv)
     env.config = F1RobotConfig(**valid_env_cfg())
 
     np.testing.assert_allclose(

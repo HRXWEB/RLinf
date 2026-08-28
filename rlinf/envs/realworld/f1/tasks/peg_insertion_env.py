@@ -62,6 +62,16 @@ class DualArmPegInsertionEnv(F1RobotEnv):
 
         return "Use both arms cooperatively to insert the peg into the matching hole."
 
+    def _reset_task(
+        self,
+        *,
+        options: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Start from the operator-prepared current robot and object state."""
+
+        del options
+        return {"reset_mode": "current_state_origin"}
+
     def _calc_step_reward(self, observation: dict[str, Any]) -> float:
         """Compute the phase-one sparse reward from one observation."""
 
