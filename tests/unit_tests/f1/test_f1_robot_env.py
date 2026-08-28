@@ -450,8 +450,8 @@ def test_f1_exposes_one_canonical_policy_state_vector() -> None:
     env = F1RobotEnv(_f1_config())
     try:
         state_space = env.observation_space["state"]
-        assert tuple(state_space.spaces) == ("proprio",)
-        assert state_space["proprio"].shape == (16,)
+        assert tuple(state_space.spaces) == ("proprioception",)
+        assert state_space["proprioception"].shape == (16,)
     finally:
         env.close()
 
@@ -474,7 +474,7 @@ def test_f1_normalizes_policy_state_and_heterogeneous_images_before_public_wrapp
     try:
         observation, _ = env.reset()
         np.testing.assert_array_equal(
-            observation["state"]["proprio"],
+            observation["state"]["proprioception"],
             np.arange(1, 17, dtype=np.float32),
         )
         assert all(
@@ -494,9 +494,9 @@ def test_f1_robot_env_exposes_14d_tcp_action_16d_state_and_three_rgb_frames() ->
         np.testing.assert_allclose(env.action_space.high, [1.0] * 14)
 
         state_space = env.observation_space["state"]
-        assert tuple(state_space.spaces) == ("proprio",)
+        assert tuple(state_space.spaces) == ("proprioception",)
         assert sum(space.shape[0] for space in state_space.spaces.values()) == 16
-        assert state_space["proprio"].shape == (16,)
+        assert state_space["proprioception"].shape == (16,)
 
         frame_space = env.observation_space["frames"]
         assert set(frame_space.spaces) == {
@@ -512,6 +512,32 @@ def test_f1_robot_env_exposes_14d_tcp_action_16d_state_and_three_rgb_frames() ->
         )
     finally:
         env.close()
+
+
+def test_f1_state_vector_follows_the_declared_state_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        F1_ENV_MODULE,
+        "F1_STATE_ORDER",
+        (
+            "right_gripper",
+            "right_joint_position",
+            "left_gripper",
+            "left_joint_position",
+        ),
+    )
+    observation = _robot_observation(
+        left_joints=np.arange(1, 8, dtype=np.float64),
+        left_gripper=8.0,
+        right_joints=np.arange(9, 16, dtype=np.float64),
+        right_gripper=16.0,
+    )
+
+    np.testing.assert_array_equal(
+        F1RobotEnv._state_vector(observation),
+        np.array([16.0, *range(9, 16), 8.0, *range(1, 8)], dtype=np.float64),
+    )
 
 
 def _ros2_controller_config() -> dict[str, object]:
@@ -884,7 +910,7 @@ def test_step_returns_copies_of_controller_observation_buffers(
         observation, *_ = env.step(np.zeros(14, dtype=np.float32))
         controller_observation = controller.observation
 
-        observation["state"]["proprio"].fill(99.0)
+        observation["state"]["proprioception"].fill(99.0)
         observation["frames"]["head_color"].fill(255)
 
         assert not np.any(controller_observation.left_joint_position_rad == 99.0)
@@ -1070,7 +1096,7 @@ def test_reset_uses_current_measured_state_as_session_origin(
         assert info["session_origin_state"].shape == (16,)
         np.testing.assert_allclose(
             info["session_origin_state"][:8],
-            observation["state"]["proprio"][:8],
+            observation["state"]["proprioception"][:8],
         )
         assert [event[0] for event in controller.events] == [
             "open",

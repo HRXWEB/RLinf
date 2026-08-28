@@ -240,7 +240,7 @@ class F1RobotEnv(gym.Env):
         self.observation_space = gym.spaces.Dict(
             {
                 "state": gym.spaces.Dict(
-                    OrderedDict((("proprio", self._float_vector_space(16)),))
+                    OrderedDict((("proprioception", self._float_vector_space(16)),))
                 ),
                 "frames": gym.spaces.Dict(
                     {
@@ -326,7 +326,9 @@ class F1RobotEnv(gym.Env):
 
     def _policy_observation(self, observation: RobotObservation) -> dict[str, Any]:
         return {
-            "state": {"proprio": self._state_vector(observation).astype(np.float32)},
+            "state": {
+                "proprioception": self._state_vector(observation).astype(np.float32)
+            },
             "frames": {
                 "head_color": self._resize_policy_image(observation.head_color_rgb),
                 "left_wrist_color": self._resize_policy_image(
@@ -353,18 +355,22 @@ class F1RobotEnv(gym.Env):
     def _state_vector(observation: RobotObservation) -> np.ndarray:
         """Return the canonical 16D joint/gripper state vector."""
 
-        return np.array(
-            [
-                *np.asarray(
-                    observation.left_joint_position_rad, dtype=np.float64
-                ).tolist(),
-                float(observation.left_gripper_position),
-                *np.asarray(
-                    observation.right_joint_position_rad, dtype=np.float64
-                ).tolist(),
-                float(observation.right_gripper_position),
-            ],
-            dtype=np.float64,
+        state_components = {
+            "left_joint_position": np.asarray(
+                observation.left_joint_position_rad, dtype=np.float64
+            ),
+            "left_gripper": np.asarray(
+                [observation.left_gripper_position], dtype=np.float64
+            ),
+            "right_joint_position": np.asarray(
+                observation.right_joint_position_rad, dtype=np.float64
+            ),
+            "right_gripper": np.asarray(
+                [observation.right_gripper_position], dtype=np.float64
+            ),
+        }
+        return np.concatenate(
+            [state_components[name] for name in F1_STATE_ORDER], axis=0
         )
 
     @staticmethod
