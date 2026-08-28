@@ -1,7 +1,7 @@
 RL with Real-World Robots
 =========================
 
-Use this section when your starting point is physical robot hardware. Start with Franka if you use a Franka arm or a Franka-based rig; use the other robot pages for GimArm, XSquare Turtle2, and Dexmal DOS-W1.
+Use this section when your starting point is physical robot hardware. Start with Franka if you use a Franka arm or a Franka-based rig; use the other robot pages for GimArm, XSquare Turtle2, Dexmal DOS-W1, and F1.
 
 Each section gives the setup path for teleoperation, data collection, sim-to-real transfer, deployment, or online RL.
 
@@ -49,6 +49,15 @@ Each section gives the setup path for teleoperation, data collection, sim-to-rea
          Train a flow-matching + SAC pick task on the Dexmal DOS-W1 dual-arm robot
        </p>
      </div>
+     <div style="flex: 1 1 30%; max-width: 300px; text-align: center;">
+       <a href="embodied/f1.html" style="display: flex; width: 100%; height: 200px; align-items: center; justify-content: center; border-radius: 8px; background: #eef2f7; box-shadow: 0 2px 6px rgba(0,0,0,0.15); font-size: 48px; font-weight: 600; color: #344054;">F1</a>
+       <p style="margin-top: 8px; font-size: 14px; line-height: 1.4;">
+         <a href="embodied/f1.html" style="text-decoration: underline; color: blue;">
+           <b>F1</b>
+         </a><br>
+         Train an SAC or RLPD policy for F1 dual-arm peg insertion
+       </p>
+     </div>
 
    </div>
 
@@ -60,3 +69,4 @@ Each section gives the setup path for teleoperation, data collection, sim-to-rea
    GimArm <embodied/gim_arm>
    XSquare Turtle2 <embodied/xsquare_turtle2>
    DOS-W1 <embodied/dosw1>
+   F1 <embodied/f1>

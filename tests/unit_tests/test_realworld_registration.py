@@ -31,6 +31,7 @@ REALWORLD_CONFIG_MODULES = {
     "DualFrankaJointEnv-v1": "rlinf.envs.realworld.franka.tasks",
     "DualFrankaTCPEnv-v1": "rlinf.envs.realworld.franka.tasks",
     "DexpnpEnv-v1": "rlinf.envs.realworld.franka.tasks",
+    "F1DualArmPegInsertionEnv-v1": "rlinf.envs.realworld.f1.tasks",
     "FrankaBinRelocationEnv-v1": "rlinf.envs.realworld.franka.tasks",
     "FrankaEnv-v1": "rlinf.envs.realworld.franka.tasks",
     "PegInsertionEnv-v1": "rlinf.envs.realworld.franka.tasks",

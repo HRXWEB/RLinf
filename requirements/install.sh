@@ -8,6 +8,8 @@ MODEL=""
 ENV_NAME=""
 VENV_DIR=".venv"
 PYTHON_VERSION="3.11.14"
+F1_RUNTIME_PYTHON_VERSION="3.12.3"
+F1_RUNTIME_RAY_VERSION="2.57.0"
 LEROBOT_COMMIT="0cf864870cf29f4738d3ade893e6fd13fbd7cdb5"
 TORCH_VERSION=""
 SGLANG_VERSION=""
@@ -79,7 +81,7 @@ USE_MIRRORS=0
 GITHUB_PREFIX=""
 NO_ROOT=0
 NO_INSTALL_RLINF_CMD="--no-install-project"
-SUPPORTED_TARGETS=("embodied" "agentic" "docs")
+SUPPORTED_TARGETS=("embodied" "agentic" "docs" "f1-realworld")
 SUPPORTED_MODELS=("openvla" "openvla-oft" "openpi" "gr00t" "gr00t_n1d6" "gr00t_n1d7" "dexbotic" "starvla" "lingbotvla" "dreamzero" "qwen3_vl" "abot_m0")
 SUPPORTED_ENVS=("behavior" "maniskill_libero" "libero" "metaworld" "calvin" "isaaclab" "robocasa" "robocasa365" "franka" "franka-dexhand" "franka-franky" "frankasim" "robotwin" "habitat" "opensora" "wan" "genesis" "xsquare_turtle2" "liberopro" "liberoplus" "roboverse" "embodichain" "d4rl" "dosw1" "gim_arm" "dummy" "polaris")
 
@@ -93,6 +95,7 @@ Targets:
     embodied               Install embodied model and envs (default).
     agentic                Install agentic stack (Megatron etc.).
     docs                   Install documentation requirements.
+    f1-realworld           Pin the shared F1 Ray runtime and install the supplied Controller package.
 
 Options (for target=embodied):
     --model <name>         Embodied model to install: ${SUPPORTED_MODELS[*]}.
@@ -886,6 +889,47 @@ EOF
         source "$VENV_DIR/bin/activate"
     fi
     uv sync --active $NO_INSTALL_RLINF_CMD
+}
+
+install_f1_realworld_runtime() {
+    if [ "$PYTHON_VERSION" != "$F1_RUNTIME_PYTHON_VERSION" ]; then
+        echo "F1 real-world runtime requires --python $F1_RUNTIME_PYTHON_VERSION (got $PYTHON_VERSION)." >&2
+        exit 1
+    fi
+
+    local repo_path active_python ray_version
+    repo_path="$(dirname "$SCRIPT_DIR")"
+    F1_ROBOT_CONTROLLER_PACKAGE="${F1_ROBOT_CONTROLLER_PACKAGE:-}"
+    install_uv
+    if [ ! -f "$VENV_DIR/bin/activate" ]; then
+        uv venv "$VENV_DIR" --python "$F1_RUNTIME_PYTHON_VERSION" --system-site-packages
+    fi
+    # shellcheck disable=SC1090
+    source "$VENV_DIR/bin/activate"
+    active_python="$(python -c 'import platform; print(platform.python_version())')"
+    if [ "$active_python" != "$F1_RUNTIME_PYTHON_VERSION" ]; then
+        echo "Existing F1 venv must use Python $F1_RUNTIME_PYTHON_VERSION (got $active_python)." >&2
+        exit 1
+    fi
+
+    uv pip install -r "$repo_path/docker/f1/constraints/realworld-py312.txt"
+    if [ -z "$F1_ROBOT_CONTROLLER_PACKAGE" ]; then
+        echo "F1 real-world runtime requires F1_ROBOT_CONTROLLER_PACKAGE to be a f1-robot-controller wheel, package URL, or pinned git URL." >&2
+        exit 1
+    fi
+    uv pip install --no-deps "$F1_ROBOT_CONTROLLER_PACKAGE"
+    python -c "import shutil; import f1_robot_controller as controller; assert callable(controller.create_controller); assert callable(controller.load_controller_config); assert callable(controller.validate_motion_envelope); assert shutil.which('f1-controller')"
+    uv pip install --no-deps -e "$repo_path"
+
+    ray_version="$(python -c 'import ray; print(ray.__version__)')"
+    if [ "$ray_version" != "$F1_RUNTIME_RAY_VERSION" ]; then
+        echo "F1 Ray version mismatch: expected $F1_RUNTIME_RAY_VERSION, got $ray_version." >&2
+        exit 1
+    fi
+    python -c "import f1_robot_controller, rlinf; assert callable(f1_robot_controller.create_controller)"
+    printf '%s\n' \
+        "F1_RUNTIME_PYTHON_VERSION=$active_python" \
+        "F1_RUNTIME_RAY_VERSION=$ray_version"
 }
 
 install_flash_attn() {
@@ -2372,6 +2416,10 @@ main() {
         docs)
             create_and_sync_venv
             install_docs
+            ;;
+        f1-realworld)
+            install_f1_realworld_runtime
+            return 0
             ;;
         *)
 			echo "Unknown target: $TARGET" >&2
