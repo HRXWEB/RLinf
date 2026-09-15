@@ -48,19 +48,19 @@ runner:
     experiment_name: f1_right_arm_peg_rlpd_cnn_async
     logger_backends: [tensorboard]
 
-  max_epochs: 20
-  max_steps: 20
+  max_epochs: 200
+  max_steps: 200
   weight_sync_interval: 1
   only_eval: false
   val_check_interval: -1
-  save_interval: 5
+  save_interval: 10
   resume_dir: null
   ckpt_path: null
 
 algorithm:
   # Each environment step performs several replay updates. Before the first
   # robot interaction, warm-start the same CNN actor from demonstrations only.
-  update_epoch: 8
+  update_epoch: 16
   bc_warmup_updates: 2000
   bc_warmup_batch_size: 64
   bc_log_interval: 20
@@ -288,8 +288,8 @@ rollout:
 actor:
   group_name: ActorGroup
   training_backend: fsdp
-  micro_batch_size: 4
-  global_batch_size: 4
+  micro_batch_size: 8
+  global_batch_size: 64
   seed: 1234
   enable_offload: false
 
