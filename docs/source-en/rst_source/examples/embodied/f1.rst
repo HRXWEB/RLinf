@@ -71,6 +71,32 @@ Observation and Action
      - Task reward and success signal returned by ``F1DualArmPegInsertionEnv-v1``. Controller faults stop motion and reject the step.
      - ``Use both arms cooperatively to insert the peg into the matching hole.``
 
+Right-Arm Fixed-Target Variant
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Use ``realworld_f1_right_arm_peg_rlpd_cnn_async`` for the simplified task in
+which the right gripper already holds the insert and the hole is fixed. Its
+``F1RightArmPegInsertionEnv-v0`` policy interface contains one
+``head_color`` image, a 6D right TCP pose, and a 6D normalized right TCP delta.
+The wrapper sends zero deltas to the left arm and both grippers, so they hold
+their measured state.
+
+The only task calibration is ``target_tcp_pose_m_deg``, a final
+``[x, y, z, rx, ry, rz]`` pose in meters and degrees read from
+``/state/right_arm/tcp_pos``. Its reference is the controller-native
+``right_arm_tcp_pose`` frame. No pre-insert waypoint or approach axis is
+required, so demonstrations may approach the target from different paths.
+
+The dense reward is the change in a weighted position-and-orientation target
+potential, minus ``step_penalty``. Holding still away from success therefore
+cannot accumulate positive reward. Success requires both errors to remain
+within their tolerances for ``success_hold_steps``, adds one bonus, and ends the
+episode because ``ignore_terminations`` is false. The horizon is 50 policy
+steps (5 seconds at 10 Hz). Convert the recorded 50 Hz demonstrations to 10 Hz
+before computing robust action statistics; ``tcp_position_m`` and
+``tcp_orientation_deg`` remain mandatory ``???`` values until that conversion
+is complete.
+
 Architecture and Node Roles
 ---------------------------
 

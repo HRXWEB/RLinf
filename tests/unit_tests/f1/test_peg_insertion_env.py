@@ -31,6 +31,7 @@ sys.path.insert(0, str(ROOT))
 F1_PACKAGE_DIR = ROOT / "rlinf" / "envs" / "realworld" / "f1"
 TASKS_PACKAGE = "rlinf.envs.realworld.f1.tasks"
 ENV_ID = "F1DualArmPegInsertionEnv-v1"
+RIGHT_ARM_ENV_ID = "F1RightArmPegInsertionEnv-v0"
 LEGACY_ENV_ID = "F1DualArmPegInsertionEnv-v0"
 EXPECTED_TASK_DESCRIPTION = (
     "Use both arms cooperatively to insert the peg into the matching hole."
@@ -121,6 +122,7 @@ def task_module(monkeypatch: pytest.MonkeyPatch) -> Iterator[ModuleType]:
         yield module
     finally:
         registry.pop(ENV_ID, None)
+        registry.pop(RIGHT_ARM_ENV_ID, None)
 
 
 def _make_task_env(**overrides: object) -> gym.Env:
@@ -130,6 +132,32 @@ def _make_task_env(**overrides: object) -> gym.Env:
             "controller": _fake_controller_config(),
             "action_scale": _action_scale(),
             "motion_envelope": _approved_motion_envelope(),
+            **overrides,
+        },
+        worker_info=None,
+        hardware_info=None,
+        env_idx=0,
+        env_cfg={"source": "realworld-wrapper"},
+    )
+
+
+def _make_right_arm_env(**overrides: object) -> gym.Env:
+    return gym.make(
+        RIGHT_ARM_ENV_ID,
+        override_cfg={
+            "controller": _fake_controller_config(),
+            "action_scale": _action_scale(),
+            "motion_envelope": _approved_motion_envelope(),
+            "target_tcp_pose_m_deg": [0.01, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "tcp_reference_frame": "right_arm_tcp_pose",
+            "position_reward_scale_m": 0.02,
+            "orientation_reward_scale_deg": 10.0,
+            "position_weight": 0.7,
+            "orientation_weight": 0.3,
+            "step_penalty": 0.01,
+            "position_tolerance_m": 0.002,
+            "orientation_tolerance_deg": 2.0,
+            "success_hold_steps": 1,
             **overrides,
         },
         worker_info=None,
@@ -153,6 +181,138 @@ def test_registration_exposes_only_canonical_v1_and_is_reload_safe(
     reloaded = importlib.reload(task_module)
     assert reloaded is task_module
     assert gym.spec(ENV_ID) is specification
+
+
+def test_registration_exposes_right_arm_fixed_target_task(
+    task_module: ModuleType,
+) -> None:
+    """Catch the single-arm task disappearing from the public Gym registry."""
+
+    assert RIGHT_ARM_ENV_ID in registry
+    specification = gym.spec(RIGHT_ARM_ENV_ID)
+    assert specification.entry_point == (
+        "rlinf.envs.realworld.f1.tasks:create_right_arm_peg_insertion_env"
+    )
+
+
+def test_right_arm_task_exposes_only_head_image_tcp_state_and_six_actions(
+    task_module: ModuleType,
+) -> None:
+    """Catch dual-arm observations or actions leaking into the single-arm API."""
+
+    env = _make_right_arm_env()
+    try:
+        observation, info = env.reset()
+
+        assert env.action_space.shape == (6,)
+        assert set(observation["frames"]) == {"head_color"}
+        assert observation["state"]["proprioception"].shape == (6,)
+        assert env.observation_space.contains(observation)
+        assert info["tcp_reference_frame"] == "right_arm_tcp_pose"
+    finally:
+        env.close()
+
+
+def test_right_arm_action_holds_left_arm_and_both_grippers(
+    task_module: ModuleType,
+) -> None:
+    """Catch the six-dimensional policy action moving an inactive actuator."""
+
+    env = _make_right_arm_env()
+    try:
+        env.reset()
+        _, reward, terminated, truncated, info = env.step(
+            np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        )
+
+        np.testing.assert_allclose(info["absolute_left_tcp_target_m_deg"], 0.0)
+        assert info["absolute_left_gripper_target"] == pytest.approx(50.0)
+        np.testing.assert_allclose(
+            info["absolute_right_tcp_target_m_deg"],
+            [0.005, 0.0, 0.0, 0.0, 0.0, 0.0],
+        )
+        assert info["absolute_right_gripper_target"] == pytest.approx(50.0)
+        assert reward > 0.0
+        assert terminated is False
+        assert truncated is False
+    finally:
+        env.close()
+
+
+def test_right_arm_dense_reward_approaches_the_only_target_pose(
+    task_module: ModuleType,
+) -> None:
+    """Catch reward depending on a pre-insert pose or approach direction."""
+
+    env = _make_right_arm_env()
+    try:
+        env.reset()
+        _, first_reward, first_terminated, _, _ = env.step(
+            np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        )
+        _, second_reward, second_terminated, _, info = env.step(
+            np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        )
+
+        assert first_reward > 0.0
+        assert first_terminated is False
+        assert second_reward > first_reward
+        assert second_terminated is True
+        assert info["is_success"] is True
+        assert info["position_error_m"] == pytest.approx(0.0, abs=1e-8)
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        (
+            {"target_tcp_pose_m_deg": [0.0] * 5},
+            "target_tcp_pose_m_deg",
+        ),
+        (
+            {"tcp_reference_frame": ""},
+            "tcp_reference_frame",
+        ),
+        (
+            {"success_hold_steps": 0},
+            "success_hold_steps",
+        ),
+    ],
+)
+def test_right_arm_task_rejects_ambiguous_calibration(
+    task_module: ModuleType,
+    overrides: dict[str, object],
+    message: str,
+) -> None:
+    """Catch invalid target calibration reaching the robot controller."""
+
+    with pytest.raises((TypeError, ValueError), match=message):
+        _make_right_arm_env(**overrides)
+
+
+def test_right_arm_stationary_action_cannot_farm_dense_reward(
+    task_module: ModuleType,
+) -> None:
+    """A stationary policy away from the target receives only the step cost."""
+
+    env = _make_right_arm_env()
+    try:
+        env.reset()
+        _, first_reward, first_terminated, _, _ = env.step(
+            np.zeros(6, dtype=np.float32)
+        )
+        _, second_reward, second_terminated, _, _ = env.step(
+            np.zeros(6, dtype=np.float32)
+        )
+
+        assert first_reward == pytest.approx(-0.01)
+        assert second_reward == pytest.approx(-0.01)
+        assert first_terminated is False
+        assert second_terminated is False
+    finally:
+        env.close()
 
 
 def test_config_defaults_to_ten_steps(task_module: ModuleType) -> None:

@@ -46,27 +46,51 @@ class NoAutoResetSyncVectorEnv(SyncVectorEnv):
             The batched environment step results
         """
         self._actions = actions
-        observations, infos = [], {}
+        uses_current_gymnasium_buffers = hasattr(self, "_observations")
+        observations = (
+            self._env_obs
+            if uses_current_gymnasium_buffers
+            else [None for _ in range(self.num_envs)]
+        )
+        terminations = (
+            self._terminations
+            if uses_current_gymnasium_buffers
+            else self._terminateds
+        )
+        truncations = (
+            self._truncations
+            if uses_current_gymnasium_buffers
+            else self._truncateds
+        )
+        observation_buffer = (
+            self._observations
+            if uses_current_gymnasium_buffers
+            else self.observations
+        )
+        infos = {}
         for i, (env, action) in enumerate(zip(self.envs, self._actions)):
             (
-                observation,
+                observations[i],
                 self._rewards[i],
-                self._terminateds[i],
-                self._truncateds[i],
+                terminations[i],
+                truncations[i],
                 info,
             ) = env.step(action)
 
-            observations.append(observation)
             infos = self._add_info(infos, info, i)
-        self.observations = concatenate(
-            self.single_observation_space, observations, self.observations
+        batched_observations = concatenate(
+            self.single_observation_space, observations, observation_buffer
         )
+        if uses_current_gymnasium_buffers:
+            self._observations = batched_observations
+        else:
+            self.observations = batched_observations
 
         return (
-            deepcopy(self.observations) if self.copy else self.observations,
+            deepcopy(batched_observations) if self.copy else batched_observations,
             np.copy(self._rewards),
-            np.copy(self._terminateds),
-            np.copy(self._truncateds),
+            np.copy(terminations),
+            np.copy(truncations),
             infos,
         )
 

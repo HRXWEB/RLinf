@@ -70,6 +70,29 @@ backend。
      - ``F1DualArmPegInsertionEnv-v1`` 返回的任务 reward 和 success signal。Controller fault 会停止 motion 并拒绝该 step。
      - ``Use both arms cooperatively to insert the peg into the matching hole.``
 
+右臂固定目标简化任务
+~~~~~~~~~~~~~~~~~~~~
+
+对于“右夹爪已夹好插入物、孔位固定”的简化任务，使用
+``realworld_f1_right_arm_peg_rlpd_cnn_async``。它对应的
+``F1RightArmPegInsertionEnv-v0`` policy 接口只包含一张 ``head_color`` 图像、
+6D 右臂 TCP pose 和 6D normalized 右臂 TCP delta。wrapper 对左臂和两个夹爪
+发送零增量，因此它们保持各自的测量状态。
+
+任务只使用一项标定：``target_tcp_pose_m_deg``。它是从
+``/state/right_arm/tcp_pos`` 读取的最终 ``[x, y, z, rx, ry, rz]`` 位姿，位置单位
+为米、姿态单位为度，reference 是 Controller native
+``right_arm_tcp_pose``。环境不要求 pre-insert waypoint 或 approach axis，因此
+demonstration 可以沿不同路径接近目标。
+
+dense reward 是加权 position/orientation target 势函数之差，再减去
+``step_penalty``，所以远离成功区域时保持静止不能持续获得正 reward。position 和
+orientation error 连续 ``success_hold_steps`` 次满足阈值后，只发放一次 bonus；
+由于 ``ignore_terminations`` 为 false，episode 随即结束。horizon 为 50 个 policy
+step，在 10 Hz 下即 5 秒。先把 50 Hz demonstration 转成 10 Hz，再统计稳健的
+action scale；在转换完成前，``tcp_position_m`` 和 ``tcp_orientation_deg`` 保持为
+必填 ``???``。
+
 架构与节点角色
 --------------
 

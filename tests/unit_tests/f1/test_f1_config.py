@@ -38,7 +38,9 @@ sys.path.insert(0, str(ROOT))
 CONFIG_ROOT = ROOT / "examples" / "embodiment" / "config"
 CONFIG_NAME = "realworld_dummy_f1_peg_sac_cnn_async"
 REAL_CONFIG_NAME = "realworld_f1_peg_rlpd_cnn_async"
+RIGHT_ARM_CONFIG_NAME = "realworld_f1_right_arm_peg_rlpd_cnn_async"
 ENV_ID = "F1DualArmPegInsertionEnv-v1"
+RIGHT_ARM_ENV_ID = "F1RightArmPegInsertionEnv-v0"
 LEGACY_ENV_ID = "F1DualArmPegInsertionEnv-v0"
 FORBIDDEN_RUNTIME_TERMS = (
     "phase2_handoff",
@@ -207,6 +209,42 @@ def _compose_named_config(monkeypatch: pytest.MonkeyPatch, config_name: str) -> 
         return compose(config_name=config_name)
 
 
+def test_right_arm_training_config_matches_single_camera_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catch model dimensions or calibration fields drifting from the Gym API."""
+
+    cfg = _compose_named_config(monkeypatch, RIGHT_ARM_CONFIG_NAME)
+
+    assert cfg.env.train.init_params.id == "F1RightArmPegInsertionEnv-v0"
+    assert cfg.env.train.action_dim == 6
+    assert cfg.actor.model.state_dim == 6
+    assert cfg.actor.model.action_dim == 6
+    assert cfg.actor.model.image_num == 1
+    assert cfg.rollout.model.action_dim == 6
+    assert cfg.rollout.model.image_num == 1
+    assert cfg.env.train.override_cfg.tcp_reference_frame == "right_arm_tcp_pose"
+    assert cfg.env.train.override_cfg.target_tcp_pose_m_deg == pytest.approx(
+        [
+            0.44955976596586413,
+            -0.3352953675189463,
+            0.0013522214579902752,
+            133.0234530608409,
+            9.986915810015027,
+            92.17254756233342,
+        ]
+    )
+    assert OmegaConf.is_missing(
+        cfg.env.train.override_cfg.action_scale, "tcp_position_m"
+    )
+    assert OmegaConf.is_missing(
+        cfg.env.train.override_cfg.action_scale, "tcp_orientation_deg"
+    )
+    assert cfg.env.train.ignore_terminations is False
+    assert cfg.env.train.max_episode_steps == 50
+    assert cfg.env.train.override_cfg.max_num_steps == 50
+
+
 def _approved_motion_envelope() -> dict[str, object]:
     arm = {
         "tcp": {
@@ -280,12 +318,15 @@ def _motion_envelope_file() -> Path:
 @pytest.fixture
 def registered_f1(monkeypatch: pytest.MonkeyPatch) -> Iterator[ModuleType]:
     registry.pop(ENV_ID, None)
+    registry.pop(RIGHT_ARM_ENV_ID, None)
     module = importlib.import_module("rlinf.envs.realworld.f1.tasks")
     importlib.reload(module)
     try:
         yield module
     finally:
         registry.pop(ENV_ID, None)
+        registry.pop(RIGHT_ARM_ENV_ID, None)
+        sys.modules.pop("rlinf.envs.realworld.f1.tasks", None)
 
 
 def _make_env(
