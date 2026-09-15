@@ -25,6 +25,7 @@ import gymnasium as gym
 import numpy as np
 
 from ..f1_robot_env import F1RobotConfig, F1RobotEnv
+from .peg_reward import peg_pose_metrics, peg_transition_reward
 
 _RIGHT_TCP_ACTION = slice(7, 13)
 
@@ -126,7 +127,7 @@ class RightArmPegInsertionEnv(F1RobotEnv):
                 ),
             }
         )
-        self._previous_potential = 0.0
+        self._previous_pose = np.zeros(6, dtype=np.float64)
         self._success_steps = 0
         self._success_bonus_awarded = False
         self._last_task_metrics: dict[str, float | bool] = {}
@@ -164,61 +165,31 @@ class RightArmPegInsertionEnv(F1RobotEnv):
         observation, info = super().reset(seed=seed, options=options)
         metrics = self._task_metrics(observation)
         self._last_task_metrics = metrics
-        self._previous_potential = float(metrics["task_potential"])
+        self._previous_pose = np.asarray(
+            observation["state"]["proprioception"], dtype=np.float64
+        ).copy()
         return observation, info
-
-    @staticmethod
-    def _wrapped_orientation_delta_deg(
-        current: np.ndarray, target: np.ndarray
-    ) -> np.ndarray:
-        return (current - target + 180.0) % 360.0 - 180.0
 
     def _task_metrics(self, observation: dict[str, Any]) -> dict[str, float | bool]:
         pose = np.asarray(observation["state"]["proprioception"], dtype=np.float64)
-        target = np.asarray(self.config.target_tcp_pose_m_deg, dtype=np.float64)
-        position_error = float(np.linalg.norm(pose[:3] - target[:3]))
-        orientation_error = float(
-            np.linalg.norm(self._wrapped_orientation_delta_deg(pose[3:], target[3:]))
-        )
-        position_score = float(
-            np.exp(-((position_error / self.config.position_reward_scale_m) ** 2))
-        )
-        orientation_score = float(
-            np.exp(
-                -((orientation_error / self.config.orientation_reward_scale_deg) ** 2)
-            )
-        )
-        potential = (
-            self.config.position_weight * position_score
-            + self.config.orientation_weight * orientation_score
-        )
-        within_success_region = (
-            position_error <= self.config.position_tolerance_m
-            and orientation_error <= self.config.orientation_tolerance_deg
-        )
-        return {
-            "position_error_m": position_error,
-            "orientation_error_deg": orientation_error,
-            "position_score": position_score,
-            "orientation_score": orientation_score,
-            "task_potential": potential,
-            "within_success_region": within_success_region,
-        }
+        return peg_pose_metrics(pose, self.config)
 
     def _calc_step_reward(self, observation: dict[str, Any]) -> float:
         metrics = self._task_metrics(observation)
-        reward = (
-            float(metrics["task_potential"])
-            - self._previous_potential
-            - self.config.step_penalty
-        )
-        self._previous_potential = float(metrics["task_potential"])
+        pose = np.asarray(observation["state"]["proprioception"], dtype=np.float64)
         reaches_success_hold = (
             bool(metrics["within_success_region"])
             and self._success_steps + 1 >= self.config.success_hold_steps
         )
-        if reaches_success_hold and not self._success_bonus_awarded:
-            reward += self.config.success_bonus
+        terminal_success = reaches_success_hold and not self._success_bonus_awarded
+        reward = peg_transition_reward(
+            self._previous_pose,
+            pose,
+            self.config,
+            terminal_success=terminal_success,
+        )
+        self._previous_pose = pose.copy()
+        if terminal_success:
             self._success_bonus_awarded = True
         self._last_task_metrics = metrics
         return reward
