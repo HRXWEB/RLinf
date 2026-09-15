@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from omegaconf import OmegaConf
 
 from rlinf.runners.async_embodied_runner import AsyncEmbodiedRunner
+from rlinf.runners.embodied_runner import EmbodiedRunner
 
 
 class _Result:
@@ -38,7 +39,7 @@ class _MetricLogger:
 
 
 def test_bc_warmup_trains_logs_and_checkpoints_before_online_run() -> None:
-    runner = object.__new__(AsyncEmbodiedRunner)
+    runner = object.__new__(EmbodiedRunner)
     runner.cfg = OmegaConf.create(
         {"algorithm": {"bc_warmup_updates": 10}, "runner": {"resume_dir": None}}
     )
@@ -59,7 +60,7 @@ def test_bc_warmup_trains_logs_and_checkpoints_before_online_run() -> None:
 
 
 def test_bc_warmup_is_skipped_when_resuming() -> None:
-    runner = object.__new__(AsyncEmbodiedRunner)
+    runner = object.__new__(EmbodiedRunner)
     runner.cfg = OmegaConf.create(
         {
             "algorithm": {"bc_warmup_updates": 10},
@@ -71,3 +72,7 @@ def test_bc_warmup_is_skipped_when_resuming() -> None:
     runner._run_bc_warmup()
 
     assert runner.actor.calls == 0
+
+
+def test_async_runner_inherits_the_shared_bc_warmup_hook() -> None:
+    assert AsyncEmbodiedRunner._run_bc_warmup is EmbodiedRunner._run_bc_warmup
