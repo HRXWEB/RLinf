@@ -148,6 +148,7 @@ class F1RobotConfig:
     tcp_orientation_tolerance_deg: float = 1.0
     gripper_tolerance_percent_closed: float = 1.0
     policy_image_shape: tuple[int, int] = (128, 128)
+    post_action_observation_timeout_s: float = 0.25
     control_period_s: float = field(default=0.01, init=False)
     max_observation_age_s: float = field(default=0.25, init=False)
     max_observation_skew_s: float = field(default=0.05, init=False)
@@ -164,7 +165,11 @@ class F1RobotConfig:
             raise ValueError("max_num_steps must be positive")
         self.max_num_steps = int(self.max_num_steps)
 
-        positive_fields = ("reset_duration_s", "reset_timeout_s")
+        positive_fields = (
+            "reset_duration_s",
+            "reset_timeout_s",
+            "post_action_observation_timeout_s",
+        )
         for name in positive_fields:
             setattr(self, name, _positive_float(name, getattr(self, name)))
         self.tcp_position_tolerance_m = _positive_float(
@@ -366,6 +371,36 @@ class F1RobotEnv(gym.Env, ABC):
             max_skew_s=self.config.max_observation_skew_s,
             newer_than=newer_than,
         )
+
+    def _wait_for_post_action_observation(
+        self, *, newer_than: float
+    ) -> RobotObservation:
+        """Wait boundedly for sensor receipts newer than an accepted action."""
+
+        deadline_s = monotonic() + self.config.post_action_observation_timeout_s
+        last_error: ObservationUnavailableError | None = None
+        while True:
+            try:
+                observation = self._read_observation()
+                head_received_at = observation.timestamps.received_at_monotonic_s[
+                    "head_color"
+                ]
+                if head_received_at > newer_than:
+                    return observation
+                raise ObservationUnavailableError(
+                    "head_color receipt is not newer than command acceptance: "
+                    f"{head_received_at} <= {newer_than}"
+                )
+            except ObservationUnavailableError as error:
+                last_error = error
+            remaining_s = deadline_s - monotonic()
+            if remaining_s <= 0.0:
+                raise TimeoutError(
+                    "no fresh post-action observation arrived within "
+                    f"{self.config.post_action_observation_timeout_s} seconds "
+                    f"after command acceptance at {newer_than}"
+                ) from last_error
+            self._period_wait.wait(min(0.01, remaining_s))
 
     @staticmethod
     def _require_mapping(value: object, name: str) -> Mapping[str, Any]:
@@ -761,7 +796,6 @@ class F1RobotEnv(gym.Env, ABC):
             raise
         try:
             receipt = self._active_controller.submit_command(command)
-            period_deadline = monotonic() + self.config.control_period_s
             dispatch_deadline = monotonic() + max(
                 self.config.control_period_s * 3.0,
                 self.config.control_period_s,
@@ -771,11 +805,8 @@ class F1RobotEnv(gym.Env, ABC):
                 context="policy",
                 deadline_s=dispatch_deadline,
             )
-            remaining_s = period_deadline - monotonic()
-            if remaining_s > 0.0:
-                self._period_wait.wait(remaining_s)
-            measured_after = self._read_observation(
-                newer_than=receipt.accepted_at_monotonic_s
+            measured_after = self._wait_for_post_action_observation(
+                newer_than=receipt.accepted_at_monotonic_s,
             )
             self._require_healthy_controller("policy health check failed")
         except BaseException as error:

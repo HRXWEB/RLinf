@@ -287,7 +287,7 @@ class RecordingController(F1RobotController):
                 "newer_than": newer_than,
             }
         )
-        if newer_than is not None:
+        if self.policy_commands:
             self.post_submit_read_at_s = monotonic()
         if self.read_error is not None:
             raise self.read_error
@@ -322,6 +322,12 @@ class RecordingController(F1RobotController):
             command_id=command.command_id,
             accepted_at_monotonic_s=100.0 + command.command_id,
             expires_at_monotonic_s=101.0 + command.command_id,
+        )
+        self.observation.timestamps = SensorTimestamps(
+            source_timestamp_s=dict.fromkeys(SENSOR_NAMES, 1.0),
+            received_at_monotonic_s=dict.fromkeys(
+                SENSOR_NAMES, receipt.accepted_at_monotonic_s + 0.001
+            ),
         )
         self.last_receipt = receipt
         self.statuses[command.command_id] = self.policy_status
@@ -408,6 +414,7 @@ def test_f1_robot_config_has_the_frozen_phase_one_defaults() -> None:
         "tcp_orientation_tolerance_deg": 1.0,
         "gripper_tolerance_percent_closed": 1.0,
         "policy_image_shape": (128, 128),
+        "post_action_observation_timeout_s": 0.25,
         "control_period_s": 0.001,
         "max_observation_age_s": 0.25,
         "max_observation_skew_s": 0.05,
@@ -745,10 +752,7 @@ def test_real_backend_step_uses_controller_020_mapping_and_14d_delta_schema(
         )
         assert command.left_gripper_target == pytest.approx(50.0)
         assert command.right_gripper_target == pytest.approx(50.0)
-        assert (
-            controller.read_requests[-1]["newer_than"]
-            == controller.last_receipt.accepted_at_monotonic_s
-        )
+        assert controller.read_requests[-1]["newer_than"] is None
         np.testing.assert_array_equal(info["policy_action"], expected_policy_action)
         np.testing.assert_array_equal(
             info["absolute_left_tcp_target_m_deg"],
@@ -828,13 +832,10 @@ def test_step_submits_one_physical_absolute_command_and_preserves_policy_action(
         assert not truncated
         assert env.observation_space.contains(observation)
         assert controller.last_receipt is not None
-        assert (
-            controller.read_requests[-1]["newer_than"]
-            == controller.last_receipt.accepted_at_monotonic_s
-        )
+        assert controller.read_requests[-1]["newer_than"] is None
         assert controller.submitted_at_s is not None
         assert controller.post_submit_read_at_s is not None
-        assert controller.post_submit_read_at_s - controller.submitted_at_s >= 0.015
+        assert controller.post_submit_read_at_s - controller.submitted_at_s < 0.015
     finally:
         env.close()
 
@@ -1412,7 +1413,7 @@ def test_installed_fake_reset_and_step_use_fresh_receipts_without_ros_imports(
         assert step_info["command_status"] is CommandStatus.FINISHED_DISPATCH
         assert step_info["command_id"] == 0
         assert newer_than_values[0] is None
-        assert newer_than_values[-1] == step_info["command_accepted_at_monotonic_s"]
+        assert newer_than_values[-1] is None
         assert (
             step_info["command_created_at_monotonic_s"]
             <= step_info["command_accepted_at_monotonic_s"]
@@ -1435,6 +1436,46 @@ def test_installed_fake_reset_and_step_use_fresh_receipts_without_ros_imports(
         or name.startswith("cv_bridge.")
     }
     assert ros_modules_after == ros_modules_before
+
+
+def test_step_waits_for_a_fresh_post_action_observation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = F1RobotEnv(
+        _f1_config(
+            control_period_s=0.001,
+            post_action_observation_timeout_s=0.05,
+        )
+    )
+    controller = env._active_controller
+    original_read = controller.read_observation
+    fresh_attempts = 0
+    read_calls = 0
+
+    def temporarily_stale_read(
+        *,
+        max_age_s: float,
+        max_skew_s: float,
+        newer_than: float | None = None,
+    ) -> Any:
+        nonlocal fresh_attempts, read_calls
+        read_calls += 1
+        if read_calls >= 2:
+            fresh_attempts += 1
+            if fresh_attempts == 1:
+                raise ObservationUnavailableError("synthetic camera delivery gap")
+        return original_read(
+            max_age_s=max_age_s,
+            max_skew_s=max_skew_s,
+            newer_than=newer_than,
+        )
+
+    monkeypatch.setattr(controller, "read_observation", temporarily_stale_read)
+    try:
+        env.step(np.zeros(14, dtype=np.float32))
+        assert fresh_attempts == 2
+    finally:
+        env.close()
 
 
 def test_installed_fake_recovers_from_step_read_failure_through_reset(
