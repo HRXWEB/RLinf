@@ -24,6 +24,7 @@ from typing import Iterator
 import gymnasium as gym
 import numpy as np
 import pytest
+from f1_robot_controller import ObservationUnavailableError
 from gymnasium.envs.registration import registry
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -237,6 +238,59 @@ def test_right_arm_reset_moves_both_arms_to_configured_joint_pose(
         )
         assert info["reset_mode"] == "dual_arm_joint_pose"
         assert env.unwrapped._next_command_id == 1
+    finally:
+        env.close()
+
+
+def test_right_arm_reset_requires_a_post_acceptance_observation(
+    task_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = _make_right_arm_env(reset_duration_s=0.001, reset_timeout_s=0.1)
+    controller = env.unwrapped._active_controller
+    original_read = controller.read_observation
+    newer_than_values: list[float | None] = []
+
+    def record_read(**kwargs: float | None) -> object:
+        newer_than_values.append(kwargs.get("newer_than"))
+        return original_read(**kwargs)
+
+    monkeypatch.setattr(controller, "read_observation", record_read)
+    try:
+        env.reset()
+
+        assert any(value is not None for value in newer_than_values)
+    finally:
+        env.close()
+
+
+def test_right_arm_reset_stops_when_post_acceptance_state_never_arrives(
+    task_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = _make_right_arm_env(reset_duration_s=0.001, reset_timeout_s=0.01)
+    controller = env.unwrapped._active_controller
+    original_read = controller.read_observation
+    original_stop = controller.stop_command_dispatch
+    stop_reasons: list[str] = []
+
+    def reject_post_acceptance(**kwargs: float | None) -> object:
+        if kwargs.get("newer_than") is not None:
+            raise ObservationUnavailableError("no post-reset observation")
+        return original_read(**kwargs)
+
+    def record_stop(reason: str) -> None:
+        stop_reasons.append(reason)
+        original_stop(reason)
+
+    monkeypatch.setattr(controller, "read_observation", reject_post_acceptance)
+    monkeypatch.setattr(controller, "stop_command_dispatch", record_stop)
+    try:
+        with pytest.raises(TimeoutError, match="did not converge"):
+            env.reset()
+
+        assert len(stop_reasons) == 1
+        assert stop_reasons[0].startswith("reset failed")
     finally:
         env.close()
 

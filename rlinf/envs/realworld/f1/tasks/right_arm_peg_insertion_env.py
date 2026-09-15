@@ -24,7 +24,7 @@ from typing import Any
 
 import gymnasium as gym
 import numpy as np
-from f1_robot_controller import DualArmResetCommand
+from f1_robot_controller import DualArmResetCommand, ObservationUnavailableError
 
 from ..f1_robot_env import F1RobotConfig, F1RobotEnv
 from .peg_reward import peg_pose_metrics, peg_transition_reward
@@ -190,23 +190,30 @@ class RightArmPegInsertionEnv(F1RobotEnv):
             timeout_s=self.config.reset_timeout_s,
             created_at_monotonic_s=monotonic(),
         )
-        controller.submit_reset_command(command)
+        receipt = controller.submit_reset_command(command)
         deadline_s = monotonic() + self.config.reset_timeout_s
         self._wait_for_finished_dispatch(
             command_id=command_id,
             context="joint reset",
             deadline_s=deadline_s,
         )
+        newer_than = receipt.accepted_at_monotonic_s
         while True:
-            measured = self._read_observation()
-            left_error = np.max(
-                np.abs(measured.left_joint_position_rad - target_left_rad)
-            )
-            right_error = np.max(
-                np.abs(measured.right_joint_position_rad - target_right_rad)
-            )
-            if max(left_error, right_error) <= tolerance_rad:
-                break
+            try:
+                measured = self._read_observation(newer_than=newer_than)
+            except ObservationUnavailableError:
+                measured = None
+            if measured is not None:
+                newer_than = None
+            if measured is not None:
+                left_error = np.max(
+                    np.abs(measured.left_joint_position_rad - target_left_rad)
+                )
+                right_error = np.max(
+                    np.abs(measured.right_joint_position_rad - target_right_rad)
+                )
+                if max(left_error, right_error) <= tolerance_rad:
+                    break
             remaining_s = deadline_s - monotonic()
             if remaining_s <= 0.0:
                 raise TimeoutError(
