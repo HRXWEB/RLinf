@@ -201,9 +201,34 @@ class EmbodiedRunner:
             num_updates,
         )
         results = self.actor.run_bc_warmup().wait()
+        history_by_update: dict[int, dict[str, list[float]]] = defaultdict(
+            lambda: defaultdict(list)
+        )
+        summary_results = []
+        for result in results:
+            summary_results.append(
+                {key: value for key, value in result.items() if key != "_bc_history"}
+            )
+            for point in result.get("_bc_history", []):
+                update = int(point["update"])
+                history_by_update[update]["loss"].append(float(point["loss"]))
+                history_by_update[update]["action_mae"].append(
+                    float(point["action_mae"])
+                )
+        for update, values in sorted(history_by_update.items()):
+            self.metric_logger.log(
+                {
+                    "bc/loss": sum(values["loss"]) / len(values["loss"]),
+                    "bc/action_mae": sum(values["action_mae"])
+                    / len(values["action_mae"]),
+                },
+                update,
+            )
         metrics = {
             f"train/{key}": value
-            for key, value in self._aggregate_numeric_metrics(results).items()
+            for key, value in self._aggregate_numeric_metrics(
+                summary_results
+            ).items()
         }
         self.metric_logger.log(metrics, self.global_step)
         self._save_checkpoint()

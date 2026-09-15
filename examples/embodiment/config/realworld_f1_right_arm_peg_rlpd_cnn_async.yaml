@@ -61,8 +61,9 @@ algorithm:
   # Each environment step performs several replay updates. Before the first
   # robot interaction, warm-start the same CNN actor from demonstrations only.
   update_epoch: 8
-  bc_warmup_updates: 1000
+  bc_warmup_updates: 2000
   bc_warmup_batch_size: 64
+  bc_log_interval: 20
   group_size: 1
   agg_q: min
   actor_agg_q: mean

@@ -708,7 +708,13 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         self.model.train()
         losses = []
         action_maes = []
-        for _ in range(num_updates):
+        history = []
+        interval_losses = []
+        interval_action_maes = []
+        log_interval = int(self.cfg.algorithm.get("bc_log_interval", 20))
+        if log_interval <= 0:
+            raise ValueError("bc_log_interval must be positive.")
+        for update in range(1, num_updates + 1):
             global_batch = self.demo_buffer.sample(batch_size_per_rank)
             micro_batches = split_dict_to_chunk(global_batch, gradient_accumulation)
             self.optimizer.zero_grad()
@@ -735,6 +741,18 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             self.qf_lr_scheduler.step()
             losses.append(float(np.mean(update_losses)))
             action_maes.append(float(np.mean(update_maes)))
+            interval_losses.append(losses[-1])
+            interval_action_maes.append(action_maes[-1])
+            if update % log_interval == 0 or update == num_updates:
+                history.append(
+                    {
+                        "update": update,
+                        "loss": float(np.mean(interval_losses)),
+                        "action_mae": float(np.mean(interval_action_maes)),
+                    }
+                )
+                interval_losses.clear()
+                interval_action_maes.clear()
 
         self.soft_update_target_model(tau=1.0)
         metrics = {
@@ -743,6 +761,7 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             "bc/updates": num_updates,
         }
         metrics = all_reduce_dict(metrics, op=torch.distributed.ReduceOp.AVG)
+        metrics["_bc_history"] = history
         torch.cuda.synchronize()
         torch.distributed.barrier()
         torch.cuda.empty_cache()

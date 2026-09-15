@@ -98,6 +98,8 @@ steps (5 seconds at 10 Hz). The task configuration first runs
 ``algorithm.bc_warmup_updates`` demo-only Gaussian behavior-cloning updates on
 the same CNN actor, saves ``global_step_0``, and then starts asynchronous RLPD.
 ``algorithm.update_epoch`` controls the SAC replay updates per online step.
+Set ``algorithm.bc_log_interval`` to control how often ``bc/loss`` and
+``bc/action_mae`` points are written to TensorBoard during warmup.
 Regenerate the demonstration buffer whenever the shared reward definition
 changes so offline and online transitions use identical rewards.
 

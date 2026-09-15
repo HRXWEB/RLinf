@@ -230,7 +230,8 @@ def test_right_arm_training_config_matches_single_camera_task(
         "/data/hrx/datasets/f1_single_arm_peg_insertion_demo_buffer_10hz_v3"
     )
     assert cfg.algorithm.update_epoch > 1
-    assert cfg.algorithm.bc_warmup_updates > 0
+    assert cfg.algorithm.bc_warmup_updates == 2000
+    assert cfg.algorithm.bc_log_interval == 20
     assert cfg.algorithm.bc_warmup_batch_size > cfg.actor.global_batch_size
     assert cfg.rollout.enable_torch_compile is False
     assert cfg.env.train.override_cfg.tcp_reference_frame == "right_arm_tcp_pose"

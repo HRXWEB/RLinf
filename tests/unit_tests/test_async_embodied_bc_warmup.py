@@ -18,7 +18,17 @@ from rlinf.runners.embodied_runner import EmbodiedRunner
 
 class _Result:
     def wait(self):
-        return [{"bc/loss": 0.25, "bc/action_mae": 0.1}]
+        return [
+            {
+                "bc/loss": 0.25,
+                "bc/action_mae": 0.1,
+                "bc/updates": 10,
+                "_bc_history": [
+                    {"update": 5, "loss": 0.5, "action_mae": 0.2},
+                    {"update": 10, "loss": 0.25, "action_mae": 0.1},
+                ],
+            }
+        ]
 
 
 class _Actor:
@@ -54,7 +64,16 @@ def test_bc_warmup_trains_logs_and_checkpoints_before_online_run() -> None:
 
     assert runner.actor.calls == 1
     assert runner.metric_logger.records == [
-        ({"train/bc/loss": 0.25, "train/bc/action_mae": 0.1}, 0)
+        ({"bc/loss": 0.5, "bc/action_mae": 0.2}, 5),
+        ({"bc/loss": 0.25, "bc/action_mae": 0.1}, 10),
+        (
+            {
+                "train/bc/loss": 0.25,
+                "train/bc/action_mae": 0.1,
+                "train/bc/updates": 10,
+            },
+            0,
+        ),
     ]
     assert checkpoints == [0]
 

@@ -93,7 +93,8 @@ dense reward 是加权且归一化的线性 position/orientation target 势函�
 step，在 10 Hz 下即 5 秒。任务配置首先在同一个 CNN actor 上执行
 ``algorithm.bc_warmup_updates`` 次 demo-only Gaussian BC 更新，并保存
 ``global_step_0``，随后才启动异步 RLPD。``algorithm.update_epoch`` 控制每个在线
-step 对应的 SAC replay 更新次数。共享 reward 定义变化后必须重新生成 demo buffer，
+step 对应的 SAC replay 更新次数。``algorithm.bc_log_interval`` 控制 warmup 阶段向
+TensorBoard 写入 ``bc/loss`` 和 ``bc/action_mae`` 曲线点的频率。共享 reward 定义变化后必须重新生成 demo buffer，
 以保证离线和在线 transition 使用相同 reward。
 
 架构与节点角色
