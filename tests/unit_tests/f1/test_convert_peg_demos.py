@@ -88,10 +88,14 @@ def test_build_trajectory_normalizes_actions_images_and_terminal_success() -> No
     assert torch.all(trajectory.curr_obs["main_images"][..., 1] == 255)
     assert trajectory.curr_obs["states"].shape == (2, 1, 6)
     assert trajectory.forward_inputs["action"].data_ptr() != 0
-    assert trajectory.dones[:, 0].tolist() == [False, True]
-    assert trajectory.terminations[:, 0].tolist() == [False, True]
-    assert trajectory.truncations[:, 0].tolist() == [False, False]
-    assert trajectory.rewards[-1, 0] > 4.9
+    assert trajectory.rewards.shape == (2, 1, 1)
+    assert trajectory.dones.shape == (3, 1, 1)
+    assert trajectory.terminations.shape == (3, 1, 1)
+    assert trajectory.truncations.shape == (3, 1, 1)
+    assert trajectory.dones[:, 0, 0].tolist() == [False, False, True]
+    assert trajectory.terminations[:, 0, 0].tolist() == [False, False, True]
+    assert trajectory.truncations[:, 0, 0].tolist() == [False, False, False]
+    assert trajectory.rewards[-1, 0, 0] > 4.9
 
 
 def test_build_trajectory_rejects_nonpositive_scales() -> None:

@@ -78,32 +78,39 @@ def build_trajectory(
     )
     normalized = np.clip(aligned.physical_actions / scales, -1.0, 1.0)
     actions = torch.from_numpy(normalized.astype(np.float32)).unsqueeze(1)
-    rewards = torch.tensor(
-        [
-            peg_transition_reward(
-                previous,
-                current,
-                reward_config,
-                terminal_success=index == len(aligned.physical_actions) - 1,
-            )
-            for index, (previous, current) in enumerate(
-                zip(
-                    aligned.curr_poses_m_deg,
-                    aligned.next_poses_m_deg,
-                    strict=True,
+    rewards = (
+        torch.tensor(
+            [
+                peg_transition_reward(
+                    previous,
+                    current,
+                    reward_config,
+                    terminal_success=index == len(aligned.physical_actions) - 1,
                 )
-            )
-        ],
-        dtype=torch.float32,
-    ).unsqueeze(1)
+                for index, (previous, current) in enumerate(
+                    zip(
+                        aligned.curr_poses_m_deg,
+                        aligned.next_poses_m_deg,
+                        strict=True,
+                    )
+                )
+            ],
+            dtype=torch.float32,
+        )
+        .unsqueeze(1)
+        .unsqueeze(-1)
+    )
     trajectory_length = len(actions)
     if trajectory_length == 0:
         raise ConversionError("aligned episode contains no transitions")
-    dones = torch.zeros((trajectory_length, 1), dtype=torch.bool)
+    # Online rollouts include the initial done state. Replay-buffer flattening
+    # removes that first entry, so offline trajectories must use the same
+    # [T + 1, batch, 1] layout to concatenate with online RLPD samples.
+    dones = torch.zeros((trajectory_length + 1, 1, 1), dtype=torch.bool)
     terminations = torch.zeros_like(dones)
     truncations = torch.zeros_like(dones)
-    dones[-1, 0] = True
-    terminations[-1, 0] = True
+    dones[-1, 0, 0] = True
+    terminations[-1, 0, 0] = True
 
     def process_images(images: np.ndarray) -> torch.Tensor:
         processed = np.stack(
