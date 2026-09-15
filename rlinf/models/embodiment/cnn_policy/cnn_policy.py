@@ -22,6 +22,7 @@ import torch.nn as nn
 from torch.distributions.normal import Normal
 
 from rlinf.models.embodiment.base_policy import BasePolicy, ForwardType
+from rlinf.models.embodiment.cnn_policy.bc import squashed_gaussian_bc_loss
 from rlinf.models.embodiment.modules.q_head import MultiCrossQHead, MultiQHead
 from rlinf.models.embodiment.modules.resnet_utils import ResNetEncoder
 from rlinf.models.embodiment.modules.utils import init_mlp_weights, layer_init, make_mlp
@@ -274,8 +275,21 @@ class CNNPolicy(nn.Module, BasePolicy):
             return self.crossq_q_forward(**kwargs)
         elif forward_type == ForwardType.DEFAULT:
             return self.default_forward(**kwargs)
+        elif forward_type == ForwardType.SFT:
+            return self.sft_forward(**kwargs)
         else:
             raise NotImplementedError
+
+    def sft_forward(self, obs, actions):
+        """Compute behavior-cloning loss for normalized demonstration actions."""
+
+        _, _, action_mean, action_logstd = self._actor_forward_from_processed_tensors(
+            obs["main_images"],
+            obs["states"],
+            obs.get("extra_view_images"),
+        )
+        actions = actions.reshape_as(action_mean).to(action_mean.dtype)
+        return squashed_gaussian_bc_loss(action_mean, action_logstd, actions)
 
     def default_forward(
         self,

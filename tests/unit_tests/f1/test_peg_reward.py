@@ -54,14 +54,24 @@ def test_peg_pose_metrics_combines_position_and_orientation_scores() -> None:
 
     metrics = peg_pose_metrics(pose, config)
 
-    expected_position = np.exp(-1.0)
-    expected_orientation = np.exp(-((2.0 / 10.0) ** 2))
+    expected_position = -(0.02 / 0.02)
+    expected_orientation = -(2.0 / 10.0)
     assert metrics["position_error_m"] == pytest.approx(0.02)
     assert metrics["orientation_error_deg"] == pytest.approx(2.0)
     assert metrics["task_potential"] == pytest.approx(
         0.7 * expected_position + 0.3 * expected_orientation
     )
     assert metrics["within_success_region"] is False
+
+
+def test_peg_transition_reward_has_signal_far_from_target() -> None:
+    config = _config()
+    previous = np.array([0.30, 0.0, 0.0, 179.0, 0.0, 0.0])
+    current = np.array([0.29, 0.0, 0.0, 179.0, 0.0, 0.0])
+
+    reward = peg_transition_reward(previous, current, config)
+
+    assert reward == pytest.approx(0.7 * 0.01 / 0.02 - config.step_penalty)
 
 
 def test_peg_transition_reward_adds_terminal_bonus_only_when_requested() -> None:

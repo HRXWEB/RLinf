@@ -60,12 +60,8 @@ def peg_pose_metrics(
     orientation_error = float(
         np.linalg.norm(wrapped_orientation_delta_deg(pose_array[3:], target[3:]))
     )
-    position_score = float(
-        np.exp(-((position_error / config.position_reward_scale_m) ** 2))
-    )
-    orientation_score = float(
-        np.exp(-((orientation_error / config.orientation_reward_scale_deg) ** 2))
-    )
+    position_score = -(position_error / config.position_reward_scale_m)
+    orientation_score = -(orientation_error / config.orientation_reward_scale_deg)
     potential = (
         config.position_weight * position_score
         + config.orientation_weight * orientation_score

@@ -31,6 +31,10 @@ from rlinf.data.embodied_buffer_dataset import (
 from rlinf.data.embodied_io_struct import Trajectory
 from rlinf.data.replay_buffer import TrajectoryReplayBuffer
 from rlinf.models.embodiment.base_policy import ForwardType
+from rlinf.models.embodiment.cnn_policy.bc import (
+    distributed_minimum_transitions,
+    resolve_bc_batch_size,
+)
 from rlinf.models.embodiment.modules.entropy_tunning import EntropyTemperature
 from rlinf.scheduler import Channel, Worker
 from rlinf.utils import drq
@@ -661,6 +665,88 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             self.soft_update_target_model()
 
         return metrics_data
+
+    @Worker.timer("run_bc_warmup")
+    def run_bc_warmup(self):
+        """Warm-start the CNN actor using only demonstration transitions."""
+
+        num_updates = int(self.cfg.algorithm.get("bc_warmup_updates", 0))
+        if num_updates <= 0:
+            return {}
+        if self.demo_buffer is None:
+            raise RuntimeError("BC warmup requires a configured demo buffer.")
+        if self.cfg.actor.model.model_type != "cnn_policy":
+            raise ValueError("BC warmup currently supports only cnn_policy.")
+
+        requested_batch_size = int(
+            self.cfg.algorithm.get(
+                "bc_warmup_batch_size", self.cfg.actor.global_batch_size
+            )
+        )
+        minimum_transitions = distributed_minimum_transitions(
+            self.demo_buffer.total_samples,
+            device=self.device,
+        )
+        batch_size = resolve_bc_batch_size(
+            requested_batch_size,
+            minimum_transitions,
+            micro_batch_size=self.cfg.actor.micro_batch_size,
+            world_size=self._world_size,
+        )
+        if batch_size != requested_batch_size:
+            self.log_on_first_rank(
+                f"Reducing BC warmup batch size from {requested_batch_size} "
+                f"to {batch_size} for the available demonstrations."
+            )
+        batch_size_per_rank = batch_size // self._world_size
+        gradient_accumulation = batch_size_per_rank // self.cfg.actor.micro_batch_size
+
+        if self.cfg.actor.get("enable_offload", False):
+            self.load_param_and_grad(self.device)
+            self.load_optimizer(self.device)
+
+        self.model.train()
+        losses = []
+        action_maes = []
+        for _ in range(num_updates):
+            global_batch = self.demo_buffer.sample(batch_size_per_rank)
+            micro_batches = split_dict_to_chunk(global_batch, gradient_accumulation)
+            self.optimizer.zero_grad()
+            self.qf_optimizer.zero_grad()
+            update_losses = []
+            update_maes = []
+            for batch in micro_batches:
+                batch = put_tensor_device(batch, device=self.device)
+                if self.enable_drq:
+                    drq.apply_drq(batch["curr_obs"], pad=4)
+                loss, action_mae = self.model(
+                    forward_type=ForwardType.SFT,
+                    obs=batch["curr_obs"],
+                    actions=batch["actions"],
+                )
+                (loss / gradient_accumulation).backward()
+                update_losses.append(loss.detach().item())
+                update_maes.append(action_mae)
+
+            self.model.clip_grad_norm_(max_norm=self.cfg.actor.optim.clip_grad)
+            self.optimizer.step()
+            self.qf_optimizer.step()
+            self.lr_scheduler.step()
+            self.qf_lr_scheduler.step()
+            losses.append(float(np.mean(update_losses)))
+            action_maes.append(float(np.mean(update_maes)))
+
+        self.soft_update_target_model(tau=1.0)
+        metrics = {
+            "bc/loss": float(np.mean(losses)),
+            "bc/action_mae": float(np.mean(action_maes)),
+            "bc/updates": num_updates,
+        }
+        metrics = all_reduce_dict(metrics, op=torch.distributed.ReduceOp.AVG)
+        torch.cuda.synchronize()
+        torch.distributed.barrier()
+        torch.cuda.empty_cache()
+        return metrics
 
     def process_train_metrics(self, metrics):
         replay_buffer_stats = self.replay_buffer.get_stats()

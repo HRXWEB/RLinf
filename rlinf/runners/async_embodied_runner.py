@@ -154,9 +154,28 @@ class AsyncEmbodiedRunner(EmbodiedRunner):
         eval_metrics = compute_evaluate_metrics(eval_metrics_list)
         return eval_metrics
 
+    def _run_bc_warmup(self) -> None:
+        """Warm-start the actor from demonstrations before robot interaction."""
+
+        num_updates = int(self.cfg.algorithm.get("bc_warmup_updates", 0))
+        if num_updates <= 0 or self.cfg.runner.get("resume_dir", None) is not None:
+            return
+        self.logger.info(
+            "Running %d demo-only behavior-cloning updates before rollout.",
+            num_updates,
+        )
+        results = self.actor.run_bc_warmup().wait()
+        metrics = {
+            f"train/{key}": value
+            for key, value in self._aggregate_numeric_metrics(results).items()
+        }
+        self.metric_logger.log(metrics, self.global_step)
+        self._save_checkpoint()
+
     def run(self):
         start_step = self.global_step
         start_time = time.time()
+        self._run_bc_warmup()
         self.update_rollout_weights(no_wait=self.sync_weight_no_wait)
 
         env_handle: Handle = self.env.interact(

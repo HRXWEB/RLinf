@@ -87,15 +87,19 @@ The only task calibration is ``target_tcp_pose_m_deg``, a final
 ``right_arm_tcp_pose`` frame. No pre-insert waypoint or approach axis is
 required, so demonstrations may approach the target from different paths.
 
-The dense reward is the change in a weighted position-and-orientation target
-potential, minus ``step_penalty``. Holding still away from success therefore
-cannot accumulate positive reward. Success requires both errors to remain
+The dense reward is the change in a weighted, normalized linear
+position-and-orientation target potential, minus ``step_penalty``. Unlike an
+exponential potential, it still provides a gradient when the TCP starts far
+from the target. Holding still away from success cannot accumulate positive
+reward. Success requires both errors to remain
 within their tolerances for ``success_hold_steps``, adds one bonus, and ends the
 episode because ``ignore_terminations`` is false. The horizon is 50 policy
-steps (5 seconds at 10 Hz). Convert the recorded 50 Hz demonstrations to 10 Hz
-before computing robust action statistics; ``tcp_position_m`` and
-``tcp_orientation_deg`` remain mandatory ``???`` values until that conversion
-is complete.
+steps (5 seconds at 10 Hz). The task configuration first runs
+``algorithm.bc_warmup_updates`` demo-only Gaussian behavior-cloning updates on
+the same CNN actor, saves ``global_step_0``, and then starts asynchronous RLPD.
+``algorithm.update_epoch`` controls the SAC replay updates per online step.
+Regenerate the demonstration buffer whenever the shared reward definition
+changes so offline and online transitions use identical rewards.
 
 Architecture and Node Roles
 ---------------------------

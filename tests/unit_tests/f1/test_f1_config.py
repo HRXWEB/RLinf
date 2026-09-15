@@ -227,8 +227,11 @@ def test_right_arm_training_config_matches_single_camera_task(
     assert cfg.cluster.component_placement.rollout.node_group == "gpu"
     assert cfg.cluster.component_placement.env.node_group == "f1"
     assert cfg.algorithm.demo_buffer.load_path == (
-        "/data/hrx/datasets/f1_single_arm_peg_insertion_demo_buffer_10hz_v2"
+        "/data/hrx/datasets/f1_single_arm_peg_insertion_demo_buffer_10hz_v3"
     )
+    assert cfg.algorithm.update_epoch > 1
+    assert cfg.algorithm.bc_warmup_updates > 0
+    assert cfg.algorithm.bc_warmup_batch_size > cfg.actor.global_batch_size
     assert cfg.rollout.enable_torch_compile is False
     assert cfg.env.train.override_cfg.tcp_reference_frame == "right_arm_tcp_pose"
     assert cfg.env.train.override_cfg.target_tcp_pose_m_deg == pytest.approx(
