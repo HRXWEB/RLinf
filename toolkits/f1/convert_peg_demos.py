@@ -35,6 +35,7 @@ from rlinf.envs.realworld.f1.tasks.peg_reward import (
     peg_transition_reward,
 )
 from toolkits.f1.peg_demo_data import (
+    DEFAULT_MAX_IMAGE_DELTA_S,
     AlignedEpisode,
     ConversionError,
     action_scale_statistics,
@@ -158,7 +159,11 @@ def _first_release_command_ns(timestamps: np.ndarray, values: np.ndarray) -> int
     return None
 
 
-def prepare_dataset(dataset: Path) -> list[PreparedEpisode]:
+def prepare_dataset(
+    dataset: Path,
+    *,
+    max_image_delta_s: float = DEFAULT_MAX_IMAGE_DELTA_S,
+) -> list[PreparedEpisode]:
     """Parse, truncate, and align every human-success episode."""
 
     prepared: list[PreparedEpisode] = []
@@ -173,7 +178,12 @@ def prepare_dataset(dataset: Path) -> list[PreparedEpisode]:
             streams.gripper_timestamps_ns,
             streams.gripper_values,
         )
-        aligned = align_episode(streams, release_ns=release_ns, include_images=False)
+        aligned = align_episode(
+            streams,
+            release_ns=release_ns,
+            max_image_delta_s=max_image_delta_s,
+            include_images=False,
+        )
         terminal_pose = interpolate_poses(
             streams.tcp_timestamps_ns,
             streams.tcp_poses_m_deg,
@@ -296,12 +306,13 @@ def convert_dataset(
     output: Path,
     *,
     analysis_only: bool = False,
+    max_image_delta_s: float = DEFAULT_MAX_IMAGE_DELTA_S,
 ) -> dict[str, Any]:
     """Analyze a labeled dataset and optionally publish a replay buffer."""
 
     if output.exists():
         raise FileExistsError(f"output already exists: {output}")
-    prepared = prepare_dataset(dataset)
+    prepared = prepare_dataset(dataset, max_image_delta_s=max_image_delta_s)
     scales = action_scale_statistics(
         [episode.aligned.physical_actions for episode in prepared]
     )
@@ -315,6 +326,7 @@ def convert_dataset(
         ),
         "policy_hz": 10.0,
         "policy_image_shape": list(DEFAULT_POLICY_IMAGE_SHAPE),
+        "max_image_alignment_delta_s": max_image_delta_s,
         "target_tcp_pose_m_deg": target_pose.tolist(),
         "position_scale_m": scales["position_scale_m"],
         "orientation_scale_deg": scales["orientation_scale_deg"],
@@ -346,6 +358,7 @@ def convert_dataset(
                     aligned = align_episode(
                         streams,
                         release_ns=episode.release_ns,
+                        max_image_delta_s=max_image_delta_s,
                         include_images=True,
                     )
                     trajectory = build_trajectory(
@@ -377,6 +390,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--analysis-only", action="store_true")
+    parser.add_argument(
+        "--max-image-delta-s",
+        type=float,
+        default=DEFAULT_MAX_IMAGE_DELTA_S,
+        help="Maximum nearest-camera-frame age allowed at a 10 Hz step.",
+    )
     return parser.parse_args()
 
 
@@ -388,6 +407,7 @@ def main() -> None:
         args.dataset,
         args.output,
         analysis_only=args.analysis_only,
+        max_image_delta_s=args.max_image_delta_s,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
 

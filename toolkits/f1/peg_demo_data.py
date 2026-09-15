@@ -26,6 +26,7 @@ RIGHT_TCP_TOPIC = "/state/right_arm/tcp_pos"
 RIGHT_GRIPPER_STATE_TOPIC = "/motion_ctl/gripper/right/state"
 RIGHT_GRIPPER_COMMAND_TOPIC = "/motion_ctl/gripper/right"
 TCP_NAMES = ("x", "y", "z", "rx", "ry", "rz")
+DEFAULT_MAX_IMAGE_DELTA_S = 0.2
 
 
 class ConversionError(ValueError):
@@ -212,7 +213,7 @@ def align_episode(
     *,
     release_ns: int,
     period_s: float = 0.1,
-    max_image_delta_s: float = 0.2,
+    max_image_delta_s: float = DEFAULT_MAX_IMAGE_DELTA_S,
     include_images: bool = True,
 ) -> AlignedEpisode:
     """Align image and measured TCP streams into fixed-rate transitions."""

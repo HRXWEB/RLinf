@@ -106,6 +106,15 @@ def test_align_episode_rejects_an_image_outside_tolerance() -> None:
         )
 
 
+def test_align_episode_default_tolerates_a_logged_camera_stall() -> None:
+    aligned = align_episode(
+        _streams(far_image=True),
+        release_ns=300_000_000,
+    )
+
+    assert aligned.max_image_delta_ns == 51_000_000
+
+
 def test_align_episode_can_skip_image_decoding_for_analysis() -> None:
     aligned = align_episode(
         _streams(),
