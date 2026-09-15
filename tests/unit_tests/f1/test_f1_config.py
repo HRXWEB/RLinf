@@ -245,19 +245,19 @@ def test_right_arm_training_config_matches_single_camera_task(
         0.01649676354589978
     )
     assert cfg.env.train.override_cfg.reset_left_joint_pose_deg == [
-        90,
+        110,
         -90,
         -90,
-        -90,
+        -110,
         0,
         0,
         0,
     ]
     assert cfg.env.train.override_cfg.reset_right_joint_pose_deg == [
-        -90,
+        -110,
         -90,
         90,
-        -90,
+        -110,
         0,
         0,
         0,

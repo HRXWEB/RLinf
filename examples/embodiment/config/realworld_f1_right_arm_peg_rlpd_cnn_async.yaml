@@ -205,9 +205,9 @@ env:
       reset_timeout_s: 30.0
       joint_reset_tolerance_deg: 2.0
       reset_left_joint_pose_deg: &reset_left_joint_pose_deg
-        [90, -90, -90, -90, 0, 0, 0]
+        [110, -90, -90, -110, 0, 0, 0]
       reset_right_joint_pose_deg: &reset_right_joint_pose_deg
-        [-90, -90, 90, -90, 0, 0, 0]
+        [-110, -90, 90, -110, 0, 0, 0]
       # Component-wise median TCP pose at measured gripper release across the
       # 35 successful demonstrations. Canonical units are m/deg.
       target_tcp_pose_m_deg:
