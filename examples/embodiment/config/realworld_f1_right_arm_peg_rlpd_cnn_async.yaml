@@ -48,7 +48,7 @@ runner:
     experiment_name: f1_right_arm_peg_rlpd_cnn_async
     logger_backends: [tensorboard]
 
-  max_epochs: 1
+  max_epochs: 20
   max_steps: 20
   weight_sync_interval: 1
   only_eval: false
