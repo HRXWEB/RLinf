@@ -223,23 +223,32 @@ def test_right_arm_training_config_matches_single_camera_task(
     assert cfg.actor.model.image_num == 1
     assert cfg.rollout.model.action_dim == 6
     assert cfg.rollout.model.image_num == 1
+    assert cfg.cluster.component_placement.actor.node_group == "gpu"
+    assert cfg.cluster.component_placement.rollout.node_group == "f1"
+    assert cfg.cluster.component_placement.env.node_group == "f1"
+    assert cfg.algorithm.demo_buffer.load_path == (
+        "/data/hrx/datasets/f1_single_arm_peg_insertion_demo_buffer_10hz_v1"
+    )
     assert cfg.env.train.override_cfg.tcp_reference_frame == "right_arm_tcp_pose"
     assert cfg.env.train.override_cfg.target_tcp_pose_m_deg == pytest.approx(
         [
-            0.44955976596586413,
-            -0.3352953675189463,
-            0.0013522214579902752,
-            133.0234530608409,
-            9.986915810015027,
-            92.17254756233342,
+            0.48393488343221785,
+            -0.2951324389324688,
+            0.06695701800144561,
+            134.62856612383422,
+            5.558924816706281,
+            87.42882189672278,
         ]
     )
-    assert OmegaConf.is_missing(
-        cfg.env.train.override_cfg.action_scale, "tcp_position_m"
+    assert cfg.env.train.override_cfg.action_scale.tcp_position_m == pytest.approx(
+        0.01649676354589978
     )
-    assert OmegaConf.is_missing(
-        cfg.env.train.override_cfg.action_scale, "tcp_orientation_deg"
+    assert cfg.env.train.override_cfg.action_scale.tcp_orientation_deg == pytest.approx(
+        4.592777960973893
     )
+    right_max_delta = cfg.env.train.override_cfg.motion_envelope.right_arm.tcp.max_delta
+    assert right_max_delta.position_m == pytest.approx(0.02)
+    assert right_max_delta.orientation_deg == pytest.approx(5.0)
     assert cfg.env.train.ignore_terminations is False
     assert cfg.env.train.max_episode_steps == 50
     assert cfg.env.train.override_cfg.max_num_steps == 50

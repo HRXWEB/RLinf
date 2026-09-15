@@ -20,7 +20,7 @@ cluster:
       node_group: gpu
       placement: 0
     rollout:
-      node_group: gpu
+      node_group: f1
       placement: 0
     env:
       node_group: f1
@@ -91,7 +91,7 @@ algorithm:
     cache_size: 200
     sample_window_size: 200
     min_buffer_size: 1
-    load_path: ./data/f1-right-arm-peg-demo-buffer
+    load_path: /data/hrx/datasets/f1_single_arm_peg_insertion_demo_buffer_10hz_v1
     auto_save: false
 
   target_update_freq: 1
@@ -164,9 +164,9 @@ env:
             left_gripper: /motion_ctl/gripper/left/state
             right_gripper: /motion_ctl/gripper/right/state
       action_scale: &f1_action_scale
-        # Fill both values after computing robust statistics on converted 10 Hz demos.
-        tcp_position_m: ???
-        tcp_orientation_deg: ???
+        # P99 absolute delta across successful 10 Hz demonstrations.
+        tcp_position_m: 0.01649676354589978
+        tcp_orientation_deg: 4.592777960973893
         gripper_percent_closed: 10.0
       motion_envelope: &f1_motion_envelope
         left_arm:
@@ -186,8 +186,8 @@ env:
         right_arm:
           tcp:
             max_delta:
-              position_m: 0.005
-              orientation_deg: 1.0
+              position_m: 0.02
+              orientation_deg: 5.0
             workspace_bounds:
               position_m:
                 x: {min: -1.0, max: 1.0}
@@ -199,17 +199,15 @@ env:
                 rz: {min: -180.0, max: 180.0}
         gripper_percent_closed: [0.0, 100.0]
       max_num_steps: 50
-      # Calibrated from .artifacts/f1/right_arm_fixed_insertion_target.yaml:
-      # hq-robot1 /state/right_arm/tcp_pos, frame right_arm_tcp_pose,
-      # ROS timestamp 1789450685.855553702. Canonical units are m/deg.
-      # Kept inline because .artifacts is a temporary, unshipped site record.
+      # Component-wise median TCP pose at measured gripper release across the
+      # 35 successful demonstrations. Canonical units are m/deg.
       target_tcp_pose_m_deg:
-        - 0.44955976596586413
-        - -0.3352953675189463
-        - 0.0013522214579902752
-        - 133.0234530608409
-        - 9.986915810015027
-        - 92.17254756233342
+        - 0.48393488343221785
+        - -0.2951324389324688
+        - 0.06695701800144561
+        - 134.62856612383422
+        - 5.558924816706281
+        - 87.42882189672278
       tcp_reference_frame: right_arm_tcp_pose
       position_reward_scale_m: 0.02
       orientation_reward_scale_deg: 10.0
