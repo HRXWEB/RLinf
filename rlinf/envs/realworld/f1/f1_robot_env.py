@@ -311,6 +311,7 @@ class F1RobotEnv(gym.Env, ABC):
         self._next_command_id = 0
         self._num_steps = 0
         self._period_wait = Event()
+        self._next_policy_action_at_s = 0.0
         self._session_origin: np.ndarray | None = None
         self._session_id = id(self)
         factory = (
@@ -401,6 +402,13 @@ class F1RobotEnv(gym.Env, ABC):
                     f"after command acceptance at {newer_than}"
                 ) from last_error
             self._period_wait.wait(min(0.01, remaining_s))
+
+    def _wait_for_policy_rate_limit(self) -> None:
+        """Keep physical policy command submissions at or below the configured rate."""
+
+        remaining_s = self._next_policy_action_at_s - monotonic()
+        if remaining_s > 0.0:
+            self._period_wait.wait(remaining_s)
 
     @staticmethod
     def _require_mapping(value: object, name: str) -> Mapping[str, Any]:
@@ -772,6 +780,7 @@ class F1RobotEnv(gym.Env, ABC):
             measured = self._read_observation()
             self._session_origin = self._state_vector(measured)
             self._num_steps = 0
+            self._next_policy_action_at_s = 0.0
             info = dict(reset_info)
             info["session_origin_state"] = self._session_origin.copy()
             return self._policy_observation(measured), info
@@ -786,6 +795,7 @@ class F1RobotEnv(gym.Env, ABC):
         """Apply one physical TCP delta as one absolute Controller command."""
 
         try:
+            self._wait_for_policy_rate_limit()
             measured_before = self._read_observation()
             policy_action = self._validated_action(action)
             if not self.action_space.contains(policy_action):
@@ -796,6 +806,7 @@ class F1RobotEnv(gym.Env, ABC):
             raise
         try:
             receipt = self._active_controller.submit_command(command)
+            self._next_policy_action_at_s = monotonic() + self.config.control_period_s
             dispatch_deadline = monotonic() + max(
                 self.config.control_period_s * 3.0,
                 self.config.control_period_s,

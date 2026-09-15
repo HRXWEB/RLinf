@@ -984,7 +984,7 @@ def test_step_returns_copies_of_controller_observation_buffers(
         env.close()
 
 
-def test_step_starts_the_control_period_after_command_submission(
+def test_step_checks_rate_limit_before_command_submission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     controller = RecordingController()
@@ -1010,7 +1010,7 @@ def test_step_starts_the_control_period_after_command_submission(
     try:
         env.step(np.zeros(14, dtype=np.float32))
 
-        assert clock_call_count_at_submit == [1]
+        assert clock_call_count_at_submit == [2]
     finally:
         env.close()
 
@@ -1474,6 +1474,24 @@ def test_step_waits_for_a_fresh_post_action_observation(
     try:
         env.step(np.zeros(14, dtype=np.float32))
         assert fresh_attempts == 2
+    finally:
+        env.close()
+
+
+def test_consecutive_policy_commands_are_rate_limited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = RecordingController()
+    _install_recording_controller(monkeypatch, controller)
+    env = F1RobotEnv(_f1_config(control_period_s=0.02))
+    try:
+        env.step(np.zeros(14, dtype=np.float32))
+        first_submitted_at = controller.submitted_at_s
+        env.step(np.zeros(14, dtype=np.float32))
+
+        assert first_submitted_at is not None
+        assert controller.submitted_at_s is not None
+        assert controller.submitted_at_s - first_submitted_at >= 0.015
     finally:
         env.close()
 
