@@ -288,7 +288,7 @@ actor:
   enable_offload: false
 
   model:
-    model_path: /path/to/RLinf-ResNet10-pretrained
+    model_path: /data/hrx/models/RLinf-ResNet10-pretrained
     state_dim: 6
     action_dim: 6
     image_num: 1
