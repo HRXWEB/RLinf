@@ -91,7 +91,7 @@ algorithm:
     cache_size: 200
     sample_window_size: 200
     min_buffer_size: 1
-    load_path: /data/hrx/datasets/f1_single_arm_peg_insertion_demo_buffer_10hz_v1
+    load_path: /data/hrx/datasets/f1_single_arm_peg_insertion_demo_buffer_10hz_v2
     auto_save: false
 
   target_update_freq: 1
@@ -261,7 +261,8 @@ rollout:
     image_num: 1
     num_q_heads: 10
 
-  enable_torch_compile: true
+  # Torch 2.7 / Triton 3.3 cannot compile CUDA kernels for RTX 5090 (SM120).
+  enable_torch_compile: false
   enable_cuda_graph: false
 
 actor:
