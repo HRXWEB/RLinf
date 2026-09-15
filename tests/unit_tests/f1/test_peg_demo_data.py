@@ -14,6 +14,8 @@
 
 """Tests for F1 MCAP demonstration alignment and scale calculation."""
 
+# ruff: noqa: E402
+
 import sys
 from pathlib import Path
 
@@ -30,9 +32,6 @@ from toolkits.f1.peg_demo_data import (
     align_episode,
     find_sustained_release,
 )
-
-
-NS = 1_000_000_000
 
 
 def test_sustained_release_ignores_a_transient_open_sample() -> None:
@@ -103,6 +102,18 @@ def test_align_episode_rejects_an_image_outside_tolerance() -> None:
             period_s=0.1,
             max_image_delta_s=0.05,
         )
+
+
+def test_align_episode_can_skip_image_decoding_for_analysis() -> None:
+    aligned = align_episode(
+        _streams(),
+        release_ns=300_000_000,
+        include_images=False,
+    )
+
+    assert aligned.curr_images.shape == (0, 0, 0, 3)
+    assert aligned.next_images.shape == (0, 0, 0, 3)
+    assert aligned.physical_actions.shape == (2, 6)
 
 
 def test_action_scale_statistics_pool_components_and_report_saturation() -> None:

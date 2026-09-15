@@ -146,17 +146,16 @@ def find_sustained_release(
         raise ConversionError("gripper timestamps must be strictly increasing")
     hold_ns = int(round(float(min_hold_s) * 1_000_000_000))
     closed_seen = False
-    for index, (timestamp, value) in enumerate(
-        zip(timestamps, positions, strict=True)
-    ):
+    for index, (timestamp, value) in enumerate(zip(timestamps, positions, strict=True)):
         closed_seen = closed_seen or value >= closed_threshold
         if not closed_seen or value > open_threshold:
             continue
         hold_end = int(timestamp) + hold_ns
         end_index = int(np.searchsorted(timestamps, hold_end, side="left"))
-        if end_index < len(timestamps) and np.max(
-            positions[index : end_index + 1]
-        ) <= open_threshold:
+        if (
+            end_index < len(timestamps)
+            and np.max(positions[index : end_index + 1]) <= open_threshold
+        ):
             return int(timestamp)
     raise ConversionError("episode has no sustained right-gripper release")
 
@@ -190,7 +189,7 @@ def _nearest_indices(
     return indices, deltas
 
 
-def _interpolate_poses(
+def interpolate_poses(
     timestamps_ns: np.ndarray,
     poses_m_deg: np.ndarray,
     target_timestamps_ns: np.ndarray,
@@ -212,6 +211,7 @@ def align_episode(
     release_ns: int,
     period_s: float = 0.1,
     max_image_delta_s: float = 0.05,
+    include_images: bool = True,
 ) -> AlignedEpisode:
     """Align image and measured TCP streams into fixed-rate transitions."""
 
@@ -229,17 +229,23 @@ def align_episode(
     grid = np.arange(first_ns, last_ns, period_ns, dtype=np.int64)
     if len(grid) < 2:
         raise ConversionError("episode has fewer than two aligned observations")
-    image_indices, image_deltas = _nearest_indices(
-        streams.image_timestamps_ns, grid
-    )
+    image_indices, image_deltas = _nearest_indices(streams.image_timestamps_ns, grid)
     tolerance_ns = int(round(float(max_image_delta_s) * 1e9))
     if np.any(image_deltas > tolerance_ns):
         worst_ms = float(np.max(image_deltas)) / 1e6
         raise ConversionError(
             f"image gap exceeds tolerance; worst aligned delta is {worst_ms:.3f} ms"
         )
-    images = np.stack([_decode_rgb(streams.images[index]) for index in image_indices])
-    poses = _interpolate_poses(
+    if include_images:
+        images = np.stack(
+            [_decode_rgb(streams.images[index]) for index in image_indices]
+        )
+        curr_images = images[:-1]
+        next_images = images[1:]
+    else:
+        curr_images = np.empty((0, 0, 0, 3), dtype=np.uint8)
+        next_images = np.empty((0, 0, 0, 3), dtype=np.uint8)
+    poses = interpolate_poses(
         streams.tcp_timestamps_ns,
         streams.tcp_poses_m_deg,
         grid,
@@ -248,8 +254,8 @@ def align_episode(
     actions[:, 3:] = (actions[:, 3:] + 180.0) % 360.0 - 180.0
     return AlignedEpisode(
         timestamps_ns=grid,
-        curr_images=images[:-1],
-        next_images=images[1:],
+        curr_images=curr_images,
+        next_images=next_images,
         curr_poses_m_deg=poses[:-1],
         next_poses_m_deg=poses[1:],
         physical_actions=actions,
