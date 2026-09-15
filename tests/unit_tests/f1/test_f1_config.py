@@ -224,7 +224,7 @@ def test_right_arm_training_config_matches_single_camera_task(
     assert cfg.rollout.model.action_dim == 6
     assert cfg.rollout.model.image_num == 1
     assert cfg.cluster.component_placement.actor.node_group == "gpu"
-    assert cfg.cluster.component_placement.rollout.node_group == "f1"
+    assert cfg.cluster.component_placement.rollout.node_group == "gpu"
     assert cfg.cluster.component_placement.env.node_group == "f1"
     assert cfg.algorithm.demo_buffer.load_path == (
         "/data/hrx/datasets/f1_single_arm_peg_insertion_demo_buffer_10hz_v2"
@@ -264,6 +264,12 @@ def test_right_arm_training_config_matches_single_camera_task(
     ]
     assert cfg.env.train.override_cfg.controller.ros2.command_topics.joint == (
         "/motion_ctl/joint_ctl"
+    )
+    assert cfg.env.train.override_cfg.controller.max_observation_skew_s == pytest.approx(
+        0.25
+    )
+    assert cfg.env.eval.override_cfg.controller.max_observation_skew_s == pytest.approx(
+        0.25
     )
     sensor_topics = cfg.env.train.override_cfg.controller.ros2.sensor_topics
     assert sensor_topics.left_wrist_color == sensor_topics.head_color

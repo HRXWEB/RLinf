@@ -20,7 +20,7 @@ cluster:
       node_group: gpu
       placement: 0
     rollout:
-      node_group: f1
+      node_group: gpu
       placement: 0
     env:
       node_group: f1
@@ -114,7 +114,7 @@ env:
         backend: ros2
         control_period_s: 0.1
         max_observation_age_s: 0.5
-        max_observation_skew_s: 0.15
+        max_observation_skew_s: 0.25
         ros2:
           node_name: f1_robot_controller
           sensor_topics:
