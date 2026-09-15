@@ -49,11 +49,11 @@ runner:
     logger_backends: [tensorboard]
 
   max_epochs: 1
-  max_steps: 1
+  max_steps: 20
   weight_sync_interval: 1
   only_eval: false
   val_check_interval: -1
-  save_interval: -1
+  save_interval: 5
   resume_dir: null
   ckpt_path: null
 
