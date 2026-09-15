@@ -56,6 +56,8 @@ class AlignedEpisode:
     curr_poses_m_deg: np.ndarray
     next_poses_m_deg: np.ndarray
     physical_actions: np.ndarray
+    max_image_delta_ns: int = 0
+    repeated_image_count: int = 0
 
 
 def _as_sorted_arrays(
@@ -210,7 +212,7 @@ def align_episode(
     *,
     release_ns: int,
     period_s: float = 0.1,
-    max_image_delta_s: float = 0.05,
+    max_image_delta_s: float = 0.2,
     include_images: bool = True,
 ) -> AlignedEpisode:
     """Align image and measured TCP streams into fixed-rate transitions."""
@@ -259,6 +261,8 @@ def align_episode(
         curr_poses_m_deg=poses[:-1],
         next_poses_m_deg=poses[1:],
         physical_actions=actions,
+        max_image_delta_ns=int(np.max(image_deltas)),
+        repeated_image_count=int(len(image_indices) - len(np.unique(image_indices))),
     )
 
 

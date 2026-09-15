@@ -205,6 +205,8 @@ def prepare_dataset(dataset: Path) -> list[PreparedEpisode]:
             "command_to_state_delay_s": (
                 None if command_ns is None else float((release_ns - command_ns) / 1e9)
             ),
+            "max_image_alignment_delta_ms": float(aligned.max_image_delta_ns / 1e6),
+            "repeated_image_count": aligned.repeated_image_count,
             "terminal_pose_m_deg": terminal_pose.tolist(),
         }
         prepared.append(

@@ -92,6 +92,8 @@ def test_align_episode_builds_ten_hz_transitions_and_wraps_euler_actions() -> No
     np.testing.assert_allclose(aligned.next_poses_m_deg[:, 0], [0.002, 0.004])
     np.testing.assert_allclose(aligned.physical_actions[:, 0], [0.002, 0.002])
     np.testing.assert_allclose(aligned.physical_actions[:, 3], [1.0, 1.0])
+    assert aligned.max_image_delta_ns == 0
+    assert aligned.repeated_image_count == 0
 
 
 def test_align_episode_rejects_an_image_outside_tolerance() -> None:
