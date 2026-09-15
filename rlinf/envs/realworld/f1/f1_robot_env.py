@@ -151,7 +151,7 @@ class F1RobotConfig:
     post_action_observation_timeout_s: float = 0.25
     control_period_s: float = field(default=0.01, init=False)
     max_observation_age_s: float = field(default=0.25, init=False)
-    max_observation_skew_s: float = field(default=0.05, init=False)
+    max_observation_skew_s: float | None = field(default=0.05, init=False)
     _action_scale_vector: tuple[float, ...] = field(default=(), init=False, repr=False)
 
     def __post_init__(self) -> None:
