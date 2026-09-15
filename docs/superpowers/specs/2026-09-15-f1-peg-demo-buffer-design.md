@@ -57,26 +57,44 @@ shortest-path deltas in degrees.
 ## Successful-segment detection
 
 Raw recordings include post-success motion back to the origin. Segmentation
-therefore runs on the original high-rate TCP stream before 10 Hz resampling.
+therefore runs on the original high-rate gripper-state stream before 10 Hz
+resampling.
 
-For each successful episode, the converter applies a five-sample centered
-median filter independently to XYZ and computes distance to the configured
-reference target XYZ. Starting at the episode's global minimum distance, it
-searches forward for the first retreat window spanning at least 0.2 seconds.
-A retreat window is valid when its final distance exceeds its initial distance
-by at least 5 mm and at least 80 percent of its consecutive distance changes
-are positive. The retained endpoint is the sample immediately before that
-window. To tolerate the observed approximately 0.1-second success pause, the
-endpoint may move backward to the last sample within 1 mm of the pre-retreat
-minimum.
+Every inspected successful episode begins with the right gripper closed near
+100 and contains a distinct release toward zero after insertion. The converter
+uses `/motion_ctl/gripper/right/state` as the authoritative marker. It finds the
+first transition after a value of at least 80 to a value of at most 20 that
+remains at most 20 for at least 0.1 seconds. The retained endpoint is the last
+TCP/image time before that sustained release. The corresponding
+`/motion_ctl/gripper/right` command transition is recorded as a diagnostic but
+does not replace measured state.
+
+The probe found this marker in 35 of 35 successful recordings. Release state
+persisted for at least 0.64 seconds, and command-to-state delay was at most
+22.1 ms. The marker removed between 2.57 and 7.37 seconds of post-success
+motion per episode.
 
 The report records each episode's endpoint timestamp, retained and removed
-durations, target distance, pause estimate, retreat displacement, and the
-fraction of positive distance changes. Episodes without this explicit
-near-target-then-retreat pattern are rejected for manual review instead of
-falling back to the MCAP endpoint. The CLI exposes the 5 mm, 0.2 second,
-80 percent, and 1 mm values as named options so an analysis-only run can justify
-changes without modifying code.
+durations, release hold duration, command-to-state delay, and endpoint pose.
+Episodes without a sustained release are rejected for manual review. TCP
+distance and later retreat remain diagnostics only and can never trigger a
+cut, preventing a temporary pre-success retreat from truncating a trajectory.
+
+## Reward target calibration
+
+The previously configured target pose is systematically displaced from the
+35 human-confirmed success endpoints and must not be used for this dataset.
+The robust component-wise median of the gripper-release endpoints becomes the
+dense-reward reference pose:
+
+`[0.4839348835, -0.2951324388, 0.0669570176, 134.6285661,
+5.5589248, 87.4288218]`, in metres/degrees.
+
+The conversion report retains per-axis spread and target-distance diagnostics.
+The observed sample standard deviations are approximately 11.64, 11.91, and
+10.62 mm for XYZ, and 4.84, 2.25, and 2.74 degrees for RX/RY/RZ. This calibrated
+pose is a shaping center, not the definition of task success; human outcome
+labels remain authoritative for terminal reward.
 
 ## Temporal alignment and actions
 
