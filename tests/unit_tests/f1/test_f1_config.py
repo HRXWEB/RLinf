@@ -265,6 +265,14 @@ def test_right_arm_training_config_matches_single_camera_task(
     assert cfg.env.train.override_cfg.controller.ros2.command_topics.joint == (
         "/motion_ctl/joint_ctl"
     )
+    sensor_topics = cfg.env.train.override_cfg.controller.ros2.sensor_topics
+    assert sensor_topics.left_wrist_color == sensor_topics.head_color
+    assert sensor_topics.right_wrist_color == sensor_topics.head_color
+    assert cfg.env.train.override_cfg.controller.ros2.image_shapes.left_wrist_color == [
+        720,
+        1280,
+        3,
+    ]
     assert cfg.env.train.override_cfg.action_scale.tcp_orientation_deg == pytest.approx(
         4.592777960973893
     )

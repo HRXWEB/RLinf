@@ -118,9 +118,10 @@ env:
         ros2:
           node_name: f1_robot_controller
           sensor_topics:
-            head_color: /camera/head/color/image_raw/compressed
-            left_wrist_color: /camera/left_wrist/color/image_raw/compressed
-            right_wrist_color: /camera/right_wrist/color/image_raw/compressed
+            head_color: &head_color_topic /camera/head/color/image_raw/compressed
+            # This task deliberately depends on the fixed head camera only.
+            left_wrist_color: *head_color_topic
+            right_wrist_color: *head_color_topic
             joint_state: /hal/joint_states
             left_gripper_position: /motion_ctl/gripper/left/state
             right_gripper_position: /motion_ctl/gripper/right/state
@@ -129,9 +130,9 @@ env:
             left_wrist_color: compressed
             right_wrist_color: compressed
           image_shapes:
-            head_color: [720, 1280, 3]
-            left_wrist_color: [480, 848, 3]
-            right_wrist_color: [480, 848, 3]
+            head_color: &head_color_shape [720, 1280, 3]
+            left_wrist_color: *head_color_shape
+            right_wrist_color: *head_color_shape
           left_joint_names:
             - arm_l_j1
             - arm_l_j2
