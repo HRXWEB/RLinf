@@ -817,7 +817,7 @@ class F1RobotEnv(gym.Env, ABC):
                 deadline_s=dispatch_deadline,
             )
             measured_after = self._wait_for_post_action_observation(
-                newer_than=receipt.accepted_at_monotonic_s,
+                newer_than=(receipt.accepted_at_monotonic_s + command.duration_s),
             )
             self._require_healthy_controller("policy health check failed")
         except BaseException as error:

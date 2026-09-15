@@ -326,7 +326,7 @@ class RecordingController(F1RobotController):
         self.observation.timestamps = SensorTimestamps(
             source_timestamp_s=dict.fromkeys(SENSOR_NAMES, 1.0),
             received_at_monotonic_s=dict.fromkeys(
-                SENSOR_NAMES, receipt.accepted_at_monotonic_s + 0.001
+                SENSOR_NAMES, receipt.accepted_at_monotonic_s + 1.0
             ),
         )
         self.last_receipt = receipt
@@ -1441,13 +1441,11 @@ def test_installed_fake_reset_and_step_use_fresh_receipts_without_ros_imports(
 def test_step_waits_for_a_fresh_post_action_observation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    controller = RecordingController()
+    _install_recording_controller(monkeypatch, controller)
     env = F1RobotEnv(
-        _f1_config(
-            control_period_s=0.001,
-            post_action_observation_timeout_s=0.05,
-        )
+        _f1_config(control_period_s=0.001, post_action_observation_timeout_s=0.05)
     )
-    controller = env._active_controller
     original_read = controller.read_observation
     fresh_attempts = 0
     read_calls = 0
@@ -1464,16 +1462,45 @@ def test_step_waits_for_a_fresh_post_action_observation(
             fresh_attempts += 1
             if fresh_attempts == 1:
                 raise ObservationUnavailableError("synthetic camera delivery gap")
-        return original_read(
+        observation = original_read(
             max_age_s=max_age_s,
             max_skew_s=max_skew_s,
             newer_than=newer_than,
         )
+        if fresh_attempts >= 2:
+            observation.timestamps = SensorTimestamps(
+                source_timestamp_s=observation.timestamps.source_timestamp_s,
+                received_at_monotonic_s=dict.fromkeys(SENSOR_NAMES, 1.0e20),
+            )
+        return observation
 
     monkeypatch.setattr(controller, "read_observation", temporarily_stale_read)
     try:
         env.step(np.zeros(14, dtype=np.float32))
         assert fresh_attempts == 2
+    finally:
+        env.close()
+
+
+def test_step_observation_window_starts_after_command_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = RecordingController()
+    _install_recording_controller(monkeypatch, controller)
+    env = F1RobotEnv(_f1_config(control_period_s=0.1))
+    thresholds: list[float] = []
+    original_wait = env._wait_for_post_action_observation
+
+    def recording_wait(*, newer_than: float) -> Any:
+        thresholds.append(newer_than)
+        return original_wait(newer_than=newer_than)
+
+    monkeypatch.setattr(env, "_wait_for_post_action_observation", recording_wait)
+    try:
+        env.step(np.zeros(14, dtype=np.float32))
+
+        assert controller.last_receipt is not None
+        assert thresholds == [controller.last_receipt.accepted_at_monotonic_s + 0.1]
     finally:
         env.close()
 
