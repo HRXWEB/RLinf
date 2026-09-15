@@ -68,6 +68,49 @@ _RIGHT_ACTION = slice(7, 13)
 _RIGHT_GRIPPER_ACTION = 13
 
 
+def center_crop_and_resize_rgb(
+    image: np.ndarray,
+    output_shape: tuple[int, int],
+) -> np.ndarray:
+    """Center-crop an RGB frame to a square and resize it.
+
+    Args:
+        image: Source RGB image in HWC layout.
+        output_shape: Target ``(height, width)``.
+
+    Returns:
+        An independent uint8 RGB image with the requested shape.
+
+    Raises:
+        ValueError: If the source or target shape is invalid.
+    """
+
+    source = np.asarray(image)
+    if source.ndim != 3 or source.shape[2] != 3:
+        raise ValueError("image must have shape (height, width, 3)")
+    if len(output_shape) != 2 or any(int(dim) <= 0 for dim in output_shape):
+        raise ValueError("output_shape must contain two positive dimensions")
+    source = np.asarray(source, dtype=np.uint8)
+    height, width = source.shape[:2]
+    if height <= 0 or width <= 0:
+        raise ValueError("image dimensions must be positive")
+    if width > height:
+        offset = (width - height) // 2
+        source = source[:, offset : offset + height]
+    elif height > width:
+        offset = (height - width) // 2
+        source = source[offset : offset + width, :]
+
+    target_height, target_width = (int(dim) for dim in output_shape)
+    if source.shape[:2] == (target_height, target_width):
+        return np.array(source, dtype=np.uint8, copy=True)
+    resized = Image.fromarray(source).resize(
+        (target_width, target_height),
+        resample=Image.Resampling.BILINEAR,
+    )
+    return np.array(resized, dtype=np.uint8, copy=True)
+
+
 def _finite_float(name: str, value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, Real):
         raise TypeError(f"{name} must be a real number")
@@ -347,15 +390,10 @@ class F1RobotEnv(gym.Env, ABC):
         }
 
     def _resize_policy_image(self, image: np.ndarray) -> np.ndarray:
-        target_height, target_width = self.config.policy_image_shape
-        image = np.asarray(image, dtype=np.uint8)
-        if image.shape == (target_height, target_width, 3):
-            return np.array(image, copy=True)
-        resized = Image.fromarray(image).resize(
-            (target_width, target_height),
-            resample=Image.Resampling.BILINEAR,
+        return center_crop_and_resize_rgb(
+            image,
+            self.config.policy_image_shape,
         )
-        return np.array(resized, dtype=np.uint8, copy=True)
 
     @staticmethod
     def _state_vector(observation: RobotObservation) -> np.ndarray:

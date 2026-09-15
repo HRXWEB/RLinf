@@ -521,6 +521,33 @@ def test_f1_normalizes_policy_state_and_heterogeneous_images_before_public_wrapp
         env.close()
 
 
+def test_center_crop_and_resize_rgb_removes_equal_horizontal_margins() -> None:
+    assert hasattr(F1_ENV_MODULE, "center_crop_and_resize_rgb")
+    center_crop_and_resize_rgb = F1_ENV_MODULE.center_crop_and_resize_rgb
+    image = np.zeros((720, 1280, 3), dtype=np.uint8)
+    image[:, :280] = [255, 0, 0]
+    image[:, 1000:] = [0, 0, 255]
+    image[:, 280:1000] = [0, 255, 0]
+
+    resized = center_crop_and_resize_rgb(image, (128, 128))
+
+    assert resized.shape == (128, 128, 3)
+    assert resized.dtype == np.uint8
+    assert np.all(resized == np.array([0, 255, 0], dtype=np.uint8))
+
+
+def test_center_crop_and_resize_rgb_returns_an_independent_square_frame() -> None:
+    assert hasattr(F1_ENV_MODULE, "center_crop_and_resize_rgb")
+    center_crop_and_resize_rgb = F1_ENV_MODULE.center_crop_and_resize_rgb
+    image = np.full((128, 128, 3), 17, dtype=np.uint8)
+
+    resized = center_crop_and_resize_rgb(image, (128, 128))
+    resized.fill(99)
+
+    assert resized.shape == (128, 128, 3)
+    assert np.all(image == 17)
+
+
 def test_f1_robot_env_exposes_14d_tcp_action_16d_state_and_three_rgb_frames() -> None:
     env = F1RobotEnv(_f1_config())
     try:
