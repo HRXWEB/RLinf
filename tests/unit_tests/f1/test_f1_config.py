@@ -244,6 +244,27 @@ def test_right_arm_training_config_matches_single_camera_task(
     assert cfg.env.train.override_cfg.action_scale.tcp_position_m == pytest.approx(
         0.01649676354589978
     )
+    assert cfg.env.train.override_cfg.reset_left_joint_pose_deg == [
+        90,
+        -90,
+        -90,
+        -90,
+        0,
+        0,
+        0,
+    ]
+    assert cfg.env.train.override_cfg.reset_right_joint_pose_deg == [
+        -90,
+        -90,
+        90,
+        -90,
+        0,
+        0,
+        0,
+    ]
+    assert cfg.env.train.override_cfg.controller.ros2.command_topics.joint == (
+        "/motion_ctl/joint_ctl"
+    )
     assert cfg.env.train.override_cfg.action_scale.tcp_orientation_deg == pytest.approx(
         4.592777960973893
     )

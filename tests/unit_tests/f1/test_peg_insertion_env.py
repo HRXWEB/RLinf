@@ -149,6 +149,9 @@ def _make_right_arm_env(**overrides: object) -> gym.Env:
             "action_scale": _action_scale(),
             "motion_envelope": _approved_motion_envelope(),
             "target_tcp_pose_m_deg": [0.01, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "reset_left_joint_pose_deg": [90, -90, -90, -90, 0, 0, 0],
+            "reset_right_joint_pose_deg": [-90, -90, 90, -90, 0, 0, 0],
+            "joint_reset_tolerance_deg": 2.0,
             "tcp_reference_frame": "right_arm_tcp_pose",
             "position_reward_scale_m": 0.02,
             "orientation_reward_scale_deg": 10.0,
@@ -209,6 +212,31 @@ def test_right_arm_task_exposes_only_head_image_tcp_state_and_six_actions(
         assert observation["state"]["proprioception"].shape == (6,)
         assert env.observation_space.contains(observation)
         assert info["tcp_reference_frame"] == "right_arm_tcp_pose"
+    finally:
+        env.close()
+
+
+def test_right_arm_reset_moves_both_arms_to_configured_joint_pose(
+    task_module: ModuleType,
+) -> None:
+    env = _make_right_arm_env(reset_duration_s=0.001, reset_timeout_s=0.1)
+    try:
+        _, info = env.reset()
+        measured = env.unwrapped._active_controller.read_observation(
+            max_age_s=0.25,
+            max_skew_s=0.05,
+        )
+
+        np.testing.assert_allclose(
+            np.rad2deg(measured.left_joint_position_rad),
+            [90, -90, -90, -90, 0, 0, 0],
+        )
+        np.testing.assert_allclose(
+            np.rad2deg(measured.right_joint_position_rad),
+            [-90, -90, 90, -90, 0, 0, 0],
+        )
+        assert info["reset_mode"] == "dual_arm_joint_pose"
+        assert env.unwrapped._next_command_id == 1
     finally:
         env.close()
 

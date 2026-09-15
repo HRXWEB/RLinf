@@ -19,10 +19,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from math import isfinite
 from numbers import Integral, Real
+from time import monotonic
 from typing import Any
 
 import gymnasium as gym
 import numpy as np
+from f1_robot_controller import DualArmResetCommand
 
 from ..f1_robot_env import F1RobotConfig, F1RobotEnv
 from .peg_reward import peg_pose_metrics, peg_transition_reward
@@ -58,11 +60,24 @@ def _pose(name: str, value: object) -> tuple[float, ...]:
     return tuple(float(component) for component in pose)
 
 
+def _joint_pose(name: str, value: object) -> tuple[float, ...]:
+    try:
+        pose = np.asarray(value, dtype=np.float64)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{name} must contain seven finite joint angles") from error
+    if pose.shape != (7,) or not np.all(np.isfinite(pose)):
+        raise ValueError(f"{name} must contain seven finite joint angles")
+    return tuple(float(component) for component in pose)
+
+
 @dataclass
 class RightArmPegInsertionConfig(F1RobotConfig):
     """Configuration for a calibrated, fixed-location right-arm insertion."""
 
     target_tcp_pose_m_deg: tuple[float, ...] = field(default_factory=tuple)
+    reset_left_joint_pose_deg: tuple[float, ...] = field(default_factory=tuple)
+    reset_right_joint_pose_deg: tuple[float, ...] = field(default_factory=tuple)
+    joint_reset_tolerance_deg: float = 2.0
     tcp_reference_frame: str = ""
     position_reward_scale_m: float = 0.02
     orientation_reward_scale_deg: float = 10.0
@@ -79,6 +94,15 @@ class RightArmPegInsertionConfig(F1RobotConfig):
 
         self.target_tcp_pose_m_deg = _pose(
             "target_tcp_pose_m_deg", self.target_tcp_pose_m_deg
+        )
+        self.reset_left_joint_pose_deg = _joint_pose(
+            "reset_left_joint_pose_deg", self.reset_left_joint_pose_deg
+        )
+        self.reset_right_joint_pose_deg = _joint_pose(
+            "reset_right_joint_pose_deg", self.reset_right_joint_pose_deg
+        )
+        self.joint_reset_tolerance_deg = _positive_float(
+            "joint_reset_tolerance_deg", self.joint_reset_tolerance_deg
         )
         if not isinstance(self.tcp_reference_frame, str) or not (
             self.tcp_reference_frame.strip()
@@ -149,10 +173,52 @@ class RightArmPegInsertionEnv(F1RobotEnv):
 
     def _reset_task(self, *, options: dict[str, Any] | None) -> dict[str, Any]:
         del options
+        controller = self._active_controller
+        measured = self._read_observation()
+        command_id = self._allocate_command_id()
+        target_left_rad = np.deg2rad(self.config.reset_left_joint_pose_deg)
+        target_right_rad = np.deg2rad(self.config.reset_right_joint_pose_deg)
+        tolerance_rad = np.deg2rad(self.config.joint_reset_tolerance_deg)
+        command = DualArmResetCommand(
+            command_id=command_id,
+            left_joint_target_rad=target_left_rad,
+            left_gripper_target=measured.left_gripper_position,
+            right_joint_target_rad=target_right_rad,
+            right_gripper_target=measured.right_gripper_position,
+            duration_s=self.config.reset_duration_s,
+            tolerance_rad=tolerance_rad,
+            timeout_s=self.config.reset_timeout_s,
+            created_at_monotonic_s=monotonic(),
+        )
+        controller.submit_reset_command(command)
+        deadline_s = monotonic() + self.config.reset_timeout_s
+        self._wait_for_finished_dispatch(
+            command_id=command_id,
+            context="joint reset",
+            deadline_s=deadline_s,
+        )
+        while True:
+            measured = self._read_observation()
+            left_error = np.max(
+                np.abs(measured.left_joint_position_rad - target_left_rad)
+            )
+            right_error = np.max(
+                np.abs(measured.right_joint_position_rad - target_right_rad)
+            )
+            if max(left_error, right_error) <= tolerance_rad:
+                break
+            remaining_s = deadline_s - monotonic()
+            if remaining_s <= 0.0:
+                raise TimeoutError(
+                    "dual-arm joint reset did not converge within "
+                    f"{self.config.reset_timeout_s} seconds"
+                )
+            self._period_wait.wait(min(self.config.control_period_s, remaining_s))
         self._success_steps = 0
         self._success_bonus_awarded = False
         return {
-            "reset_mode": "current_state_origin",
+            "reset_mode": "dual_arm_joint_pose",
+            "reset_command_id": command_id,
             "tcp_reference_frame": self.config.tcp_reference_frame,
         }
 
