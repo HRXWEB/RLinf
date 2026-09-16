@@ -115,7 +115,8 @@ env:
     max_episode_steps: 50
     max_steps_per_rollout_epoch: 50
     override_cfg:
-      post_action_observation_timeout_s: 0.25
+      # The head camera occasionally has ~0.5 s frame gaps after startup.
+      post_action_observation_timeout_s: 0.75
       controller: &ros2_controller
         backend: ros2
         control_period_s: 0.1
