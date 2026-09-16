@@ -110,6 +110,8 @@ TensorBoard 写入 ``bc/loss`` 和 ``bc/action_mae`` 曲线点的频率。共享
 位置裁剪到相对目标定义的标定包围盒内。5 mm command margin 会把命令目标限制在
 物理包围盒内侧，为跟踪误差预留空间。该配置只使用 online replay 训练 SAC：
 ``algorithm.demo_buffer`` 为 null，``algorithm.bc_warmup_updates`` 为零。上真机前，
+第一阶段课程使用 XY 10 mm、Z 5 mm 的成功容差，并要求连续保持 3 步；后续精确阶段
+再收紧容差。
 请根据当前机器人设置复核 target pose、reset joint pose、
 ``vendor_to_base_rotation`` 和 workspace offset。
 

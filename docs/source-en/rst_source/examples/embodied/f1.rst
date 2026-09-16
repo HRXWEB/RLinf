@@ -119,6 +119,8 @@ candidate TCP position inside the calibrated target-relative box in the
 targets inside that physical box to absorb tracking error. It trains SAC from
 online replay only:
 ``algorithm.demo_buffer`` is null and ``algorithm.bc_warmup_updates`` is zero.
+The first curriculum stage uses 10 mm XY and 5 mm Z success tolerances with a
+three-step hold; tighten these tolerances for the later precision stage.
 Before running on hardware, verify the target pose, reset joint poses,
 ``vendor_to_base_rotation``, and workspace offsets for the current robot setup.
 

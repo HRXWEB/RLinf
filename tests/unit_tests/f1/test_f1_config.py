@@ -304,6 +304,9 @@ def test_right_arm_reach_config_is_three_dimensional_demo_free_and_full_view(
     assert override.workspace_lower_offset_m == [-0.05, -0.05, -0.01]
     assert override.workspace_upper_offset_m == [0.05, 0.05, 0.05]
     assert override.workspace_command_margin_m == pytest.approx(0.005)
+    assert override.xy_tolerance_m == pytest.approx(0.010)
+    assert override.z_tolerance_m == pytest.approx(0.005)
+    assert override.success_hold_steps == 3
     assert override.target_tcp_pose_m_deg == pytest.approx(
         [0.4250046, -0.322464341, 0.178732415, 90.0, 0.0, 90.0]
     )
@@ -320,6 +323,10 @@ def test_right_arm_reach_config_is_three_dimensional_demo_free_and_full_view(
     assert cfg.env.train.ignore_terminations is False
     assert cfg.env.train.max_episode_steps == 50
     assert cfg.env.train.override_cfg.max_num_steps == 50
+    assert cfg.runner.resume_dir.endswith("checkpoints/global_step_130")
+    assert cfg.algorithm.replay_buffer.auto_save_path.endswith(
+        "online-replay-curriculum-10mm-v1"
+    )
 
 
 def _approved_motion_envelope() -> dict[str, object]:
