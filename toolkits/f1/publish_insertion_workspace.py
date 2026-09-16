@@ -22,8 +22,8 @@ from dataclasses import dataclass
 from typing import Sequence
 
 DEFAULT_TARGET_POSITION = (0.635837088, -0.110543916, 0.688607462)
-DEFAULT_LOWER_OFFSET = (-0.20, -0.05, -0.02)
-DEFAULT_UPPER_OFFSET = (0.20, 0.30, 0.10)
+DEFAULT_LOWER_OFFSET = (-0.20, -0.30, -0.02)
+DEFAULT_UPPER_OFFSET = (0.20, 0.05, 0.10)
 
 
 @dataclass(frozen=True)

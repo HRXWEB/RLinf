@@ -22,19 +22,24 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
-from toolkits.f1.publish_insertion_workspace import compute_workspace_geometry
+from toolkits.f1.publish_insertion_workspace import (
+    DEFAULT_LOWER_OFFSET,
+    DEFAULT_TARGET_POSITION,
+    DEFAULT_UPPER_OFFSET,
+    compute_workspace_geometry,
+)
 
 
 def test_compute_workspace_geometry_handles_asymmetric_target_bounds():
     geometry = compute_workspace_geometry(
-        target_position=(0.635837088, -0.110543916, 0.688607462),
-        lower_offset=(-0.20, -0.05, -0.02),
-        upper_offset=(0.20, 0.30, 0.10),
+        target_position=DEFAULT_TARGET_POSITION,
+        lower_offset=DEFAULT_LOWER_OFFSET,
+        upper_offset=DEFAULT_UPPER_OFFSET,
     )
 
-    assert geometry.minimum == pytest.approx((0.435837088, -0.160543916, 0.668607462))
-    assert geometry.maximum == pytest.approx((0.835837088, 0.189456084, 0.788607462))
-    assert geometry.center == pytest.approx((0.635837088, 0.014456084, 0.728607462))
+    assert geometry.minimum == pytest.approx((0.435837088, -0.410543916, 0.668607462))
+    assert geometry.maximum == pytest.approx((0.835837088, -0.060543916, 0.788607462))
+    assert geometry.center == pytest.approx((0.635837088, -0.235543916, 0.728607462))
     assert geometry.scale == pytest.approx((0.40, 0.35, 0.12))
 
 
