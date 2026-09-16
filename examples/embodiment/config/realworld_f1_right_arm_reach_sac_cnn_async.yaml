@@ -1,0 +1,299 @@
+defaults:
+  - env/realworld_f1_peg_insertion@env.train
+  - env/realworld_f1_peg_insertion@env.eval
+  - model/cnn_policy@actor.model
+  - hybrid_engines/fsdp@actor.fsdp_config
+  - weight_syncer/patch_syncer@weight_syncer
+  - override hydra/job_logging: stdout
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+cluster:
+  num_nodes: 2
+  component_placement:
+    actor:
+      node_group: gpu
+      placement: 0
+    rollout:
+      node_group: gpu
+      placement: 0
+    env:
+      node_group: f1
+      placement: 0
+  node_groups:
+    - label: gpu
+      node_ranks: 0
+      env_configs:
+        - node_ranks: 0
+    - label: f1
+      node_ranks: 1
+      env_configs:
+        - node_ranks: 1
+          python_interpreter_path: /opt/rlinf-venv/bin/python
+      hardware:
+        type: F1
+        configs:
+          - node_rank: 1
+
+runner:
+  task_type: embodied
+  logger:
+    log_path: ./logs/f1-right-arm-reach-sac
+    project_name: rlinf
+    experiment_name: f1_right_arm_reach_sac_cnn_async
+    logger_backends: [tensorboard]
+
+  max_epochs: 200
+  max_steps: 200
+  weight_sync_interval: 1
+  only_eval: false
+  val_check_interval: -1
+  save_interval: 10
+  resume_dir: null
+  ckpt_path: null
+
+algorithm:
+  # Learn from online interaction only; demonstrations and BC are disabled.
+  update_epoch: 4
+  bc_warmup_updates: 0
+  bc_warmup_batch_size: 64
+  bc_log_interval: 20
+  group_size: 1
+  agg_q: min
+  actor_agg_q: mean
+  adv_type: embodied_sac
+  loss_type: embodied_sac
+  loss_agg_func: token-mean
+  bootstrap_type: always
+  gamma: 0.8
+  tau: 0.01
+  initial_random_steps: 20
+  entropy_tuning:
+    alpha_type: softplus
+    initial_alpha: 0.01
+    target_entropy: -3
+    optim:
+      lr: 3.0e-4
+      lr_scheduler: torch_constant
+      clip_grad: 10.0
+
+  replay_buffer:
+    enable_cache: true
+    cache_size: 200
+    sample_window_size: 200
+    min_buffer_size: 1
+    auto_save: true
+    auto_save_path: ./logs/f1-right-arm-reach-sac/online-replay
+
+  demo_buffer: null
+
+  target_update_freq: 1
+
+env:
+  group_name: EnvGroup
+
+  train:
+    auto_reset: false
+    ignore_terminations: false
+    action_dim: 3
+    main_image_key: right_wrist_color
+    init_params:
+      id: F1RightArmFixedReachEnv-v0
+    rollout_epoch: 1
+    total_num_envs: 1
+    max_episode_steps: 50
+    max_steps_per_rollout_epoch: 50
+    override_cfg:
+      policy_image_shape: [128, 224]
+      post_action_image_source: right_wrist_color
+      post_action_observation_timeout_s: 0.75
+      controller: &ros2_controller
+        backend: ros2
+        control_period_s: 0.1
+        max_observation_age_s: 0.5
+        max_observation_skew_s: null
+        ros2:
+          node_name: f1_robot_controller
+          sensor_topics:
+            head_color: &right_wrist_topic /camera/right_wrist/color/image_raw/compressed
+            left_wrist_color: *right_wrist_topic
+            right_wrist_color: *right_wrist_topic
+            joint_state: /hal/joint_states
+            left_gripper_position: /motion_ctl/gripper/left/state
+            right_gripper_position: /motion_ctl/gripper/right/state
+          image_transports:
+            head_color: compressed
+            left_wrist_color: compressed
+            right_wrist_color: compressed
+          image_shapes:
+            head_color: &right_wrist_shape [480, 848, 3]
+            left_wrist_color: *right_wrist_shape
+            right_wrist_color: *right_wrist_shape
+          left_joint_names:
+            - arm_l_j1
+            - arm_l_j2
+            - arm_l_j3
+            - arm_l_j4
+            - arm_l_j5
+            - arm_l_j6
+            - arm_l_j7
+          right_joint_names:
+            - arm_r_j1
+            - arm_r_j2
+            - arm_r_j3
+            - arm_r_j4
+            - arm_r_j5
+            - arm_r_j6
+            - arm_r_j7
+          joint_position_scale_to_rad: 0.017453292519943295
+          left_gripper_raw_open: 0.0
+          left_gripper_raw_closed: 100.0
+          right_gripper_raw_open: 0.0
+          right_gripper_raw_closed: 100.0
+          command_topics:
+            joint: /motion_ctl/joint_ctl
+            left_tcp: /motion_ctl/left_arm/tcp_pos_ctl
+            right_tcp: /motion_ctl/right_arm/tcp_pos_ctl
+            left_gripper: /motion_ctl/gripper/left
+            right_gripper: /motion_ctl/gripper/right
+          command_state_topics:
+            left_tcp: /state/left_arm/tcp_pos
+            right_tcp: /state/right_arm/tcp_pos
+            left_gripper: /motion_ctl/gripper/left/state
+            right_gripper: /motion_ctl/gripper/right/state
+      action_scale: &f1_action_scale
+        tcp_position_m: 0.005
+        # Unused by the 3D policy, retained for the controller's full action schema.
+        tcp_orientation_deg: 4.592777960973893
+        gripper_percent_closed: 10.0
+      motion_envelope: &f1_motion_envelope
+        left_arm:
+          tcp:
+            max_delta:
+              position_m: 0.005
+              orientation_deg: 1.0
+            workspace_bounds:
+              position_m:
+                x: {min: -1.0, max: 1.0}
+                y: {min: -1.0, max: 1.0}
+                z: {min: -1.0, max: 1.0}
+              orientation_deg:
+                rx: {min: -180.0, max: 180.0}
+                ry: {min: -180.0, max: 180.0}
+                rz: {min: -180.0, max: 180.0}
+        right_arm:
+          tcp:
+            max_delta:
+              position_m: 0.02
+              orientation_deg: 5.0
+            workspace_bounds:
+              position_m:
+                x: {min: -1.0, max: 1.0}
+                y: {min: -1.0, max: 1.0}
+                z: {min: -1.0, max: 1.0}
+              orientation_deg:
+                rx: {min: -180.0, max: 180.0}
+                ry: {min: -180.0, max: 180.0}
+                rz: {min: -180.0, max: 180.0}
+        gripper_percent_closed: [0.0, 100.0]
+      max_num_steps: 50
+      reset_duration_s: 3.0
+      reset_timeout_s: 30.0
+      joint_reset_tolerance_deg: 2.0
+      reset_left_joint_pose_deg: &reset_left_joint_pose_deg
+        [90.069641, -90.213570, -89.999977, -89.884888, 0.112102, -0.078100, 0.288096]
+      reset_right_joint_pose_deg: &reset_right_joint_pose_deg
+        [-90.595497, -90.133537, 91.482964, -94.693253, -0.569998, 4.254984, 1.380569]
+      target_tcp_pose_m_deg: &target_tcp_pose_m_deg
+        [0.425004600, -0.322464341, 0.178732415, 90.0, 0.0, 90.0]
+      fixed_orientation_deg: &fixed_orientation_deg [90.0, 0.0, 90.0]
+      vendor_to_base_rotation: &vendor_to_base_rotation
+        - [0.999965413, 0.008316957, -0.000042578]
+        - [-0.000040078, -0.000300758, -0.999999954]
+        - [-0.008316969, 0.999965368, -0.000300414]
+      workspace_lower_offset_m: &workspace_lower_offset_m [-0.05, -0.05, -0.01]
+      workspace_upper_offset_m: &workspace_upper_offset_m [0.05, 0.05, 0.05]
+      tcp_reference_frame: right_arm_tcp_pose
+      position_reward_scale_m: 0.01
+      step_penalty: 0.01
+      xy_tolerance_m: 0.005
+      z_tolerance_m: 0.003
+      success_hold_steps: 3
+      success_bonus: 5.0
+
+  eval:
+    auto_reset: false
+    ignore_terminations: false
+    action_dim: 3
+    main_image_key: right_wrist_color
+    init_params:
+      id: F1RightArmFixedReachEnv-v0
+    rollout_epoch: 0
+    total_num_envs: 0
+    max_episode_steps: 50
+    max_steps_per_rollout_epoch: 0
+    override_cfg: ${env.train.override_cfg}
+
+rollout:
+  group_name: RolloutGroup
+  backend: huggingface
+  enable_offload: false
+  pipeline_stage_num: 1
+  collect_transitions: true
+  collect_prev_infos: false
+
+  model:
+    model_path: ${actor.model.model_path}
+    precision: ${actor.model.precision}
+    action_dim: 3
+    image_num: 1
+    num_q_heads: 10
+
+  # Torch 2.7 / Triton 3.3 cannot compile CUDA kernels for RTX 5090 (SM120).
+  enable_torch_compile: false
+  enable_cuda_graph: false
+
+actor:
+  group_name: ActorGroup
+  training_backend: fsdp
+  micro_batch_size: 8
+  global_batch_size: 64
+  seed: 1234
+  enable_offload: false
+
+  model:
+    model_path: /data/hrx/models/RLinf-ResNet10-pretrained
+    image_size: [3, 128, 224]
+    state_dim: 3
+    action_dim: 3
+    image_num: 1
+    num_q_heads: 10
+
+  optim:
+    clip_grad: 10.0
+    lr: 3.0e-4
+    lr_scheduler: torch_constant
+
+  critic_optim:
+    clip_grad: 10.0
+    lr: 3.0e-4
+    lr_scheduler: torch_constant
+
+  fsdp_config:
+    strategy: fsdp
+    sharding_strategy: no_shard
+    mixed_precision:
+      param_dtype: ${actor.model.precision}
+      reduce_dtype: ${actor.model.precision}
+      buffer_dtype: ${actor.model.precision}
+
+reward:
+  use_reward_model: false
+
+critic:
+  use_critic_model: false

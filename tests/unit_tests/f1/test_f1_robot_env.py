@@ -415,6 +415,7 @@ def test_f1_robot_config_has_the_frozen_phase_one_defaults() -> None:
         "gripper_tolerance_percent_closed": 1.0,
         "policy_image_shape": (128, 128),
         "post_action_observation_timeout_s": 0.25,
+        "post_action_image_source": "head_color",
         "control_period_s": 0.001,
         "max_observation_age_s": 0.25,
         "max_observation_skew_s": 0.05,
@@ -553,6 +554,23 @@ def test_center_crop_and_resize_rgb_returns_an_independent_square_frame() -> Non
 
     assert resized.shape == (128, 128, 3)
     assert np.all(image == 17)
+
+
+def test_resize_rgb_preserves_the_full_rectangular_field_of_view() -> None:
+    """Catch the right-wrist path silently center-cropping its source image."""
+
+    assert hasattr(F1_ENV_MODULE, "resize_rgb")
+    resize_rgb = F1_ENV_MODULE.resize_rgb
+    image = np.zeros((4, 8, 3), dtype=np.uint8)
+    image[:, :2] = [255, 0, 0]
+    image[:, -2:] = [0, 0, 255]
+
+    resized = resize_rgb(image, (2, 4))
+
+    assert resized.shape == (2, 4, 3)
+    assert resized.dtype == np.uint8
+    assert resized[0, 0, 0] > resized[0, 0, 2]
+    assert resized[0, -1, 2] > resized[0, -1, 0]
 
 
 def test_f1_robot_env_exposes_14d_tcp_action_16d_state_and_three_rgb_frames() -> None:
@@ -1478,6 +1496,34 @@ def test_step_waits_for_a_fresh_post_action_observation(
     try:
         env.step(np.zeros(14, dtype=np.float32))
         assert fresh_attempts == 2
+    finally:
+        env.close()
+
+
+def test_post_action_wait_uses_the_configured_policy_camera(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catch right-wrist policies still synchronizing against the head camera."""
+
+    controller = RecordingController()
+    _install_recording_controller(monkeypatch, controller)
+    env = F1RobotEnv(
+        _f1_config(
+            post_action_observation_timeout_s=0.01,
+            post_action_image_source="right_wrist_color",
+        )
+    )
+    observation = SimpleNamespace(
+        timestamps=SimpleNamespace(
+            received_at_monotonic_s={
+                "head_color": 0.0,
+                "right_wrist_color": 6.0,
+            }
+        )
+    )
+    monkeypatch.setattr(env, "_read_observation", lambda: observation)
+    try:
+        assert env._wait_for_post_action_observation(newer_than=5.0) is observation
     finally:
         env.close()
 

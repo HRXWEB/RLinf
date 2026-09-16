@@ -20,6 +20,12 @@ from .peg_insertion_env import (
     DualArmPegInsertionConfig,
     DualArmPegInsertionEnv,
 )
+from .right_arm_fixed_reach_env import (
+    RightArmFixedReachConfig,
+    RightArmFixedReachEnv,
+    RightArmPositionActionWrapper,
+    create_right_arm_fixed_reach_env,
+)
 from .right_arm_peg_insertion_env import (
     RightArmActionWrapper,
     RightArmPegInsertionConfig,
@@ -29,6 +35,7 @@ from .right_arm_peg_insertion_env import (
 
 _ENV_ID = "F1DualArmPegInsertionEnv-v1"
 _RIGHT_ARM_ENV_ID = "F1RightArmPegInsertionEnv-v0"
+_RIGHT_ARM_REACH_ENV_ID = "F1RightArmFixedReachEnv-v0"
 
 if _ENV_ID not in registry:
     register(
@@ -44,11 +51,21 @@ if _RIGHT_ARM_ENV_ID not in registry:
         ),
     )
 
+if _RIGHT_ARM_REACH_ENV_ID not in registry:
+    register(
+        id=_RIGHT_ARM_REACH_ENV_ID,
+        entry_point="rlinf.envs.realworld.f1.tasks:create_right_arm_fixed_reach_env",
+    )
+
 __all__ = [
     "DualArmPegInsertionConfig",
     "DualArmPegInsertionEnv",
     "RightArmActionWrapper",
+    "RightArmFixedReachConfig",
+    "RightArmFixedReachEnv",
+    "RightArmPositionActionWrapper",
     "RightArmPegInsertionConfig",
     "RightArmPegInsertionEnv",
     "create_right_arm_peg_insertion_env",
+    "create_right_arm_fixed_reach_env",
 ]

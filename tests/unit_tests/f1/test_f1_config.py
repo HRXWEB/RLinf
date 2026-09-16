@@ -39,6 +39,7 @@ CONFIG_ROOT = ROOT / "examples" / "embodiment" / "config"
 CONFIG_NAME = "realworld_dummy_f1_peg_sac_cnn_async"
 REAL_CONFIG_NAME = "realworld_f1_peg_rlpd_cnn_async"
 RIGHT_ARM_CONFIG_NAME = "realworld_f1_right_arm_peg_rlpd_cnn_async"
+RIGHT_ARM_REACH_CONFIG_NAME = "realworld_f1_right_arm_reach_sac_cnn_async"
 ENV_ID = "F1DualArmPegInsertionEnv-v1"
 RIGHT_ARM_ENV_ID = "F1RightArmPegInsertionEnv-v0"
 LEGACY_ENV_ID = "F1DualArmPegInsertionEnv-v0"
@@ -279,6 +280,36 @@ def test_right_arm_training_config_matches_single_camera_task(
         1280,
         3,
     ]
+
+
+def test_right_arm_reach_config_is_three_dimensional_demo_free_and_full_view(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catch the curriculum config regressing to demos, 6D actions, or cropping."""
+
+    cfg = _compose_named_config(monkeypatch, RIGHT_ARM_REACH_CONFIG_NAME)
+
+    assert cfg.env.train.init_params.id == "F1RightArmFixedReachEnv-v0"
+    assert cfg.env.train.action_dim == 3
+    assert cfg.actor.model.state_dim == 3
+    assert cfg.actor.model.action_dim == 3
+    assert cfg.actor.model.image_size == [3, 128, 224]
+    assert cfg.rollout.model.action_dim == 3
+    assert cfg.algorithm.demo_buffer is None
+    assert cfg.algorithm.bc_warmup_updates == 0
+    override = cfg.env.train.override_cfg
+    assert override.policy_image_shape == [128, 224]
+    assert override.post_action_image_source == "right_wrist_color"
+    assert override.fixed_orientation_deg == [90.0, 0.0, 90.0]
+    assert override.workspace_lower_offset_m == [-0.05, -0.05, -0.01]
+    assert override.workspace_upper_offset_m == [0.05, 0.05, 0.05]
+    assert override.target_tcp_pose_m_deg == pytest.approx(
+        [0.4250046, -0.322464341, 0.178732415, 90.0, 0.0, 90.0]
+    )
+    topics = override.controller.ros2.sensor_topics
+    assert topics.head_color == topics.right_wrist_color
+    assert topics.left_wrist_color == topics.right_wrist_color
+    assert override.controller.ros2.image_shapes.right_wrist_color == [480, 848, 3]
     assert cfg.env.train.override_cfg.action_scale.tcp_orientation_deg == pytest.approx(
         4.592777960973893
     )

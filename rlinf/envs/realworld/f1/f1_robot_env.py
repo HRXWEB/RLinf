@@ -111,6 +111,30 @@ def center_crop_and_resize_rgb(
     return np.array(resized, dtype=np.uint8, copy=True)
 
 
+def resize_rgb(
+    image: np.ndarray,
+    output_shape: tuple[int, int],
+) -> np.ndarray:
+    """Resize a complete RGB frame without cropping its field of view."""
+
+    source = np.asarray(image)
+    if source.ndim != 3 or source.shape[2] != 3:
+        raise ValueError("image must have shape (height, width, 3)")
+    if len(output_shape) != 2 or any(int(dim) <= 0 for dim in output_shape):
+        raise ValueError("output_shape must contain two positive dimensions")
+    source = np.asarray(source, dtype=np.uint8)
+    if any(dim <= 0 for dim in source.shape[:2]):
+        raise ValueError("image dimensions must be positive")
+    target_height, target_width = (int(dim) for dim in output_shape)
+    if source.shape[:2] == (target_height, target_width):
+        return np.array(source, dtype=np.uint8, copy=True)
+    resized = Image.fromarray(source).resize(
+        (target_width, target_height),
+        resample=Image.Resampling.BILINEAR,
+    )
+    return np.array(resized, dtype=np.uint8, copy=True)
+
+
 def _finite_float(name: str, value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, Real):
         raise TypeError(f"{name} must be a real number")
@@ -149,6 +173,7 @@ class F1RobotConfig:
     gripper_tolerance_percent_closed: float = 1.0
     policy_image_shape: tuple[int, int] = (128, 128)
     post_action_observation_timeout_s: float = 0.25
+    post_action_image_source: str = "head_color"
     control_period_s: float = field(default=0.01, init=False)
     max_observation_age_s: float = field(default=0.25, init=False)
     max_observation_skew_s: float | None = field(default=0.05, init=False)
@@ -192,6 +217,14 @@ class F1RobotConfig:
         self.policy_image_shape = tuple(int(dim) for dim in self.policy_image_shape)
         if any(dim <= 0 for dim in self.policy_image_shape):
             raise ValueError("policy_image_shape dimensions must be positive")
+        if self.post_action_image_source not in {
+            "head_color",
+            "left_wrist_color",
+            "right_wrist_color",
+        }:
+            raise ValueError(
+                "post_action_image_source must name a configured color camera"
+            )
         if not isinstance(self.controller, Mapping):
             raise TypeError("controller must be an inline mapping")
         if not isinstance(self.motion_envelope, Mapping):
@@ -383,14 +416,14 @@ class F1RobotEnv(gym.Env, ABC):
         while True:
             try:
                 observation = self._read_observation()
-                head_received_at = observation.timestamps.received_at_monotonic_s[
-                    "head_color"
+                image_received_at = observation.timestamps.received_at_monotonic_s[
+                    self.config.post_action_image_source
                 ]
-                if head_received_at > newer_than:
+                if image_received_at > newer_than:
                     return observation
                 raise ObservationUnavailableError(
-                    "head_color receipt is not newer than command acceptance: "
-                    f"{head_received_at} <= {newer_than}"
+                    f"{self.config.post_action_image_source} receipt is not newer "
+                    f"than command acceptance: {image_received_at} <= {newer_than}"
                 )
             except ObservationUnavailableError as error:
                 last_error = error

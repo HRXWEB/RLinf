@@ -103,6 +103,23 @@ Set ``algorithm.bc_log_interval`` to control how often ``bc/loss`` and
 Regenerate the demonstration buffer whenever the shared reward definition
 changes so offline and online transitions use identical rewards.
 
+Right-Arm XYZ Reach Curriculum
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Use ``realworld_f1_right_arm_reach_sac_cnn_async`` to train the first
+curriculum stage without demonstrations. ``F1RightArmFixedReachEnv-v0``
+observes the complete right-wrist RGB frame resized directly from
+``848×480`` to ``224×128`` and the measured right TCP XYZ position. The policy
+outputs three normalized XYZ deltas; the environment holds TCP orientation at
+``[90, 0, 90]`` degrees and leaves the other actuators unchanged.
+
+The checked-in configuration applies a 5 mm action scale and clips every
+candidate TCP position inside the calibrated target-relative box in the
+``base_link`` coordinate convention. It trains SAC from online replay only:
+``algorithm.demo_buffer`` is null and ``algorithm.bc_warmup_updates`` is zero.
+Before running on hardware, verify the target pose, reset joint poses,
+``vendor_to_base_rotation``, and workspace offsets for the current robot setup.
+
 Architecture and Node Roles
 ---------------------------
 

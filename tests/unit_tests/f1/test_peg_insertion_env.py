@@ -33,6 +33,7 @@ F1_PACKAGE_DIR = ROOT / "rlinf" / "envs" / "realworld" / "f1"
 TASKS_PACKAGE = "rlinf.envs.realworld.f1.tasks"
 ENV_ID = "F1DualArmPegInsertionEnv-v1"
 RIGHT_ARM_ENV_ID = "F1RightArmPegInsertionEnv-v0"
+RIGHT_ARM_REACH_ENV_ID = "F1RightArmFixedReachEnv-v0"
 LEGACY_ENV_ID = "F1DualArmPegInsertionEnv-v0"
 EXPECTED_TASK_DESCRIPTION = (
     "Use both arms cooperatively to insert the peg into the matching hole."
@@ -124,6 +125,7 @@ def task_module(monkeypatch: pytest.MonkeyPatch) -> Iterator[ModuleType]:
     finally:
         registry.pop(ENV_ID, None)
         registry.pop(RIGHT_ARM_ENV_ID, None)
+        registry.pop(RIGHT_ARM_REACH_ENV_ID, None)
 
 
 def _make_task_env(**overrides: object) -> gym.Env:
@@ -171,6 +173,39 @@ def _make_right_arm_env(**overrides: object) -> gym.Env:
     )
 
 
+def _make_right_arm_reach_env(**overrides: object) -> gym.Env:
+    motion_envelope = _approved_motion_envelope()
+    motion_envelope["right_arm"]["tcp"]["max_delta"]["orientation_deg"] = 5.0
+    return gym.make(
+        RIGHT_ARM_REACH_ENV_ID,
+        override_cfg={
+            "controller": _fake_controller_config(),
+            "action_scale": _action_scale(),
+            "motion_envelope": motion_envelope,
+            "target_tcp_pose_m_deg": [0.01, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "reset_left_joint_pose_deg": [90, -90, -90, -90, 0, 0, 0],
+            "reset_right_joint_pose_deg": [-90, -90, 90, -90, 0, 0, 0],
+            "joint_reset_tolerance_deg": 2.0,
+            "tcp_reference_frame": "right_arm_tcp_pose",
+            "fixed_orientation_deg": [0.0, 0.0, 0.0],
+            "vendor_to_base_rotation": np.eye(3).tolist(),
+            "workspace_lower_offset_m": [-0.05, -0.05, -0.01],
+            "workspace_upper_offset_m": [0.05, 0.05, 0.05],
+            "position_reward_scale_m": 0.01,
+            "step_penalty": 0.01,
+            "xy_tolerance_m": 0.002,
+            "z_tolerance_m": 0.002,
+            "success_hold_steps": 1,
+            "policy_image_shape": [128, 224],
+            **overrides,
+        },
+        worker_info=None,
+        hardware_info=None,
+        env_idx=0,
+        env_cfg={"source": "realworld-wrapper"},
+    )
+
+
 def test_registration_exposes_only_canonical_v1_and_is_reload_safe(
     task_module: ModuleType,
 ) -> None:
@@ -197,6 +232,159 @@ def test_registration_exposes_right_arm_fixed_target_task(
     assert specification.entry_point == (
         "rlinf.envs.realworld.f1.tasks:create_right_arm_peg_insertion_env"
     )
+
+
+def test_registration_exposes_right_arm_fixed_reach_task(
+    task_module: ModuleType,
+) -> None:
+    """Catch the curriculum base task disappearing from the Gym registry."""
+
+    assert RIGHT_ARM_REACH_ENV_ID in registry
+    specification = gym.spec(RIGHT_ARM_REACH_ENV_ID)
+    assert specification.entry_point == (
+        "rlinf.envs.realworld.f1.tasks:create_right_arm_fixed_reach_env"
+    )
+
+
+def test_fixed_reach_uses_full_right_wrist_image_xyz_state_and_three_actions(
+    task_module: ModuleType,
+) -> None:
+    """Catch the reach policy receiving a cropped/head frame or 6D action."""
+
+    env = _make_right_arm_reach_env()
+    try:
+        observation, _ = env.reset()
+
+        assert env.action_space.shape == (3,)
+        assert set(observation["frames"]) == {"right_wrist_color"}
+        assert observation["frames"]["right_wrist_color"].shape == (128, 224, 3)
+        assert observation["state"]["proprioception"].shape == (3,)
+        assert env.observation_space.contains(observation)
+    finally:
+        env.close()
+
+
+def test_fixed_reach_action_holds_orientation_and_inactive_actuators(
+    task_module: ModuleType,
+) -> None:
+    """Catch XYZ policy actions leaking into orientation, grippers, or left arm."""
+
+    env = _make_right_arm_reach_env()
+    try:
+        env.reset()
+        _, _, _, _, info = env.step(np.array([1.0, 0.0, 0.0], dtype=np.float32))
+
+        np.testing.assert_allclose(info["absolute_left_tcp_target_m_deg"], 0.0)
+        assert info["absolute_left_gripper_target"] == pytest.approx(50.0)
+        np.testing.assert_allclose(
+            info["absolute_right_tcp_target_m_deg"],
+            [0.005, 0.0, 0.0, 0.0, 0.0, 0.0],
+        )
+        assert info["absolute_right_gripper_target"] == pytest.approx(50.0)
+    finally:
+        env.close()
+
+
+def test_fixed_reach_clips_candidate_position_to_base_workspace(
+    task_module: ModuleType,
+) -> None:
+    """Catch normalized actions escaping the calibrated base-frame box."""
+
+    env = _make_right_arm_reach_env(
+        target_tcp_pose_m_deg=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        workspace_lower_offset_m=[-0.001, -0.001, -0.001],
+        workspace_upper_offset_m=[0.001, 0.001, 0.001],
+    )
+    try:
+        env.reset()
+        _, _, _, _, info = env.step(np.array([1.0, 0.0, 0.0], dtype=np.float32))
+
+        np.testing.assert_allclose(
+            info["absolute_right_tcp_target_m_deg"],
+            [0.001, 0.0, 0.0, 0.0, 0.0, 0.0],
+        )
+    finally:
+        env.close()
+
+
+def test_fixed_reach_clips_in_base_frame_with_non_identity_rotation(
+    task_module: ModuleType,
+) -> None:
+    """Catch transposed or sign-flipped vendor-to-base workspace transforms."""
+
+    rotation = np.array(
+        [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    env = _make_right_arm_reach_env(
+        target_tcp_pose_m_deg=[0.0] * 6,
+        vendor_to_base_rotation=rotation.tolist(),
+        workspace_lower_offset_m=[-0.01, -0.001, -0.01],
+        workspace_upper_offset_m=[0.01, 0.001, 0.01],
+    )
+    try:
+        env.reset()
+        _, _, _, _, info = env.step(np.array([1.0, 0.0, 0.0], dtype=np.float32))
+
+        commanded_vendor = info["absolute_right_tcp_target_m_deg"][:3]
+        np.testing.assert_allclose(commanded_vendor, [0.001, 0.0, 0.0])
+        np.testing.assert_allclose(rotation @ commanded_vendor, [0.0, 0.001, 0.0])
+    finally:
+        env.close()
+
+
+def test_fixed_reach_rejects_unsafe_fixed_orientation_jump(
+    task_module: ModuleType,
+) -> None:
+    """Catch fixed-orientation commands bypassing the production angular limit."""
+
+    env = _make_right_arm_reach_env(fixed_orientation_deg=[90.0, 0.0, 90.0])
+    try:
+        with pytest.raises(ValueError, match="fixed orientation delta"):
+            env.unwrapped._bounded_tcp_target(
+                arm_name="right_arm",
+                current=np.zeros(6, dtype=np.float64),
+                action=np.zeros(6, dtype=np.float64),
+            )
+    finally:
+        env.close()
+
+
+def test_fixed_reach_requires_three_consecutive_success_steps_and_bonuses_once(
+    task_module: ModuleType,
+) -> None:
+    """Catch early success or a stale hold counter after leaving tolerance."""
+
+    env = _make_right_arm_reach_env(
+        target_tcp_pose_m_deg=[0.005, 0.0, 0.0, 0.0, 0.0, 0.0],
+        success_hold_steps=3,
+    )
+    try:
+        env.reset()
+
+        _, reward_1, terminated_1, _, _ = env.step(
+            np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        )
+        _, _, terminated_away, _, _ = env.step(
+            np.array([-1.0, 0.0, 0.0], dtype=np.float32)
+        )
+        _, reward_2, terminated_2, _, _ = env.step(
+            np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        )
+        _, reward_3, terminated_3, _, _ = env.step(np.zeros(3, dtype=np.float32))
+        _, reward_4, terminated_4, _, _ = env.step(np.zeros(3, dtype=np.float32))
+
+        assert reward_1 < 5.0
+        assert reward_2 < 5.0
+        assert reward_3 < 5.0
+        assert reward_4 == pytest.approx(4.99)
+        assert not terminated_1
+        assert not terminated_away
+        assert not terminated_2
+        assert not terminated_3
+        assert terminated_4
+    finally:
+        env.close()
 
 
 def test_right_arm_task_exposes_only_head_image_tcp_state_and_six_actions(
