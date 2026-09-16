@@ -107,7 +107,8 @@ TensorBoard 写入 ``bc/loss`` 和 ``bc/action_mae`` 曲线点的频率。共享
 ``[90, 0, 90]`` 度，并保持其他 actuator 不变。
 
 仓库中的配置使用 5 mm action scale，并按照 ``base_link`` 坐标约定，将每次候选 TCP
-位置裁剪到相对目标定义的标定包围盒内。该配置只使用 online replay 训练 SAC：
+位置裁剪到相对目标定义的标定包围盒内。5 mm command margin 会把命令目标限制在
+物理包围盒内侧，为跟踪误差预留空间。该配置只使用 online replay 训练 SAC：
 ``algorithm.demo_buffer`` 为 null，``algorithm.bc_warmup_updates`` 为零。上真机前，
 请根据当前机器人设置复核 target pose、reset joint pose、
 ``vendor_to_base_rotation`` 和 workspace offset。

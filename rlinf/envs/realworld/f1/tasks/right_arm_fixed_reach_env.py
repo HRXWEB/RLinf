@@ -65,6 +65,7 @@ class RightArmFixedReachConfig(RightArmPegInsertionConfig):
     )
     workspace_lower_offset_m: tuple[float, ...] = field(default_factory=tuple)
     workspace_upper_offset_m: tuple[float, ...] = field(default_factory=tuple)
+    workspace_command_margin_m: float = 0.0
     xy_tolerance_m: float = 0.005
     z_tolerance_m: float = 0.003
     post_action_image_source: str = "right_wrist_color"
@@ -92,6 +93,22 @@ class RightArmFixedReachConfig(RightArmPegInsertionConfig):
         ):
             raise ValueError(
                 "workspace_lower_offset_m must be smaller than workspace_upper_offset_m"
+            )
+        self.workspace_command_margin_m = float(self.workspace_command_margin_m)
+        if (
+            not np.isfinite(self.workspace_command_margin_m)
+            or self.workspace_command_margin_m < 0.0
+        ):
+            raise ValueError(
+                "workspace_command_margin_m must be finite and nonnegative"
+            )
+        workspace_width = np.subtract(
+            self.workspace_upper_offset_m,
+            self.workspace_lower_offset_m,
+        )
+        if np.any(2.0 * self.workspace_command_margin_m >= workspace_width):
+            raise ValueError(
+                "workspace_command_margin_m must leave a nonempty command workspace"
             )
         super().__post_init__()
         self.xy_tolerance_m = float(self.xy_tolerance_m)
@@ -172,10 +189,13 @@ class RightArmFixedReachEnv(RightArmPegInsertionEnv):
             self.config.target_tcp_pose_m_deg, dtype=np.float64
         )
         relative_base = self._rotation @ (target[:3] - configured_target[:3])
+        command_margin = self.config.workspace_command_margin_m
         clipped_base = np.clip(
             relative_base,
-            np.asarray(self.config.workspace_lower_offset_m, dtype=np.float64),
-            np.asarray(self.config.workspace_upper_offset_m, dtype=np.float64),
+            np.asarray(self.config.workspace_lower_offset_m, dtype=np.float64)
+            + command_margin,
+            np.asarray(self.config.workspace_upper_offset_m, dtype=np.float64)
+            - command_margin,
         )
         target[:3] = configured_target[:3] + self._rotation.T @ clipped_base
         target[3:] = fixed_orientation

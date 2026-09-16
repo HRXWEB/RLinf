@@ -294,6 +294,7 @@ def test_fixed_reach_clips_candidate_position_to_base_workspace(
         target_tcp_pose_m_deg=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         workspace_lower_offset_m=[-0.001, -0.001, -0.001],
         workspace_upper_offset_m=[0.001, 0.001, 0.001],
+        workspace_command_margin_m=0.0005,
     )
     try:
         env.reset()
@@ -301,7 +302,7 @@ def test_fixed_reach_clips_candidate_position_to_base_workspace(
 
         np.testing.assert_allclose(
             info["absolute_right_tcp_target_m_deg"],
-            [0.001, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0005, 0.0, 0.0, 0.0, 0.0, 0.0],
         )
     finally:
         env.close()
@@ -348,6 +349,19 @@ def test_fixed_reach_rejects_unsafe_fixed_orientation_jump(
             )
     finally:
         env.close()
+
+
+def test_fixed_reach_rejects_margin_that_collapses_command_workspace(
+    task_module: ModuleType,
+) -> None:
+    """Catch a safety margin eliminating an axis of the command workspace."""
+
+    with pytest.raises(ValueError, match="nonempty command workspace"):
+        _make_right_arm_reach_env(
+            workspace_lower_offset_m=[-0.005, -0.005, -0.005],
+            workspace_upper_offset_m=[0.005, 0.005, 0.005],
+            workspace_command_margin_m=0.005,
+        )
 
 
 def test_fixed_reach_requires_three_consecutive_success_steps_and_bonuses_once(

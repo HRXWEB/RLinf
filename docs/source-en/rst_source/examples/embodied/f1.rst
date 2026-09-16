@@ -115,7 +115,9 @@ outputs three normalized XYZ deltas; the environment holds TCP orientation at
 
 The checked-in configuration applies a 5 mm action scale and clips every
 candidate TCP position inside the calibrated target-relative box in the
-``base_link`` coordinate convention. It trains SAC from online replay only:
+``base_link`` coordinate convention. A 5 mm command margin keeps commanded
+targets inside that physical box to absorb tracking error. It trains SAC from
+online replay only:
 ``algorithm.demo_buffer`` is null and ``algorithm.bc_warmup_updates`` is zero.
 Before running on hardware, verify the target pose, reset joint poses,
 ``vendor_to_base_rotation``, and workspace offsets for the current robot setup.

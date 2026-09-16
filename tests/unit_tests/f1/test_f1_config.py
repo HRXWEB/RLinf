@@ -303,6 +303,7 @@ def test_right_arm_reach_config_is_three_dimensional_demo_free_and_full_view(
     assert override.fixed_orientation_deg == [90.0, 0.0, 90.0]
     assert override.workspace_lower_offset_m == [-0.05, -0.05, -0.01]
     assert override.workspace_upper_offset_m == [0.05, 0.05, 0.05]
+    assert override.workspace_command_margin_m == pytest.approx(0.005)
     assert override.target_tcp_pose_m_deg == pytest.approx(
         [0.4250046, -0.322464341, 0.178732415, 90.0, 0.0, 90.0]
     )

@@ -218,6 +218,7 @@ env:
         - [-0.008316969, 0.999965368, -0.000300414]
       workspace_lower_offset_m: &workspace_lower_offset_m [-0.05, -0.05, -0.01]
       workspace_upper_offset_m: &workspace_upper_offset_m [0.05, 0.05, 0.05]
+      workspace_command_margin_m: 0.005
       tcp_reference_frame: right_arm_tcp_pose
       position_reward_scale_m: 0.01
       step_penalty: 0.01
