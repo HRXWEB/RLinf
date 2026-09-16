@@ -120,7 +120,10 @@ targets inside that physical box to absorb tracking error. It trains SAC from
 online replay only:
 ``algorithm.demo_buffer`` is null and ``algorithm.bc_warmup_updates`` is zero.
 The first curriculum stage uses 10 mm XY and 5 mm Z success tolerances with a
-three-step hold; tighten these tolerances for the later precision stage.
+three-step hold. On the first successful step, its reward is exactly 1.0;
+the terminal reward replaces dense progress and the step penalty so
+``env/success_once`` follows the RealWorld reward convention. Tighten these
+tolerances for the later precision stage.
 Before running on hardware, verify the target pose, reset joint poses,
 ``vendor_to_base_rotation``, and workspace offsets for the current robot setup.
 

@@ -225,7 +225,7 @@ env:
       xy_tolerance_m: 0.010
       z_tolerance_m: 0.005
       success_hold_steps: 3
-      success_bonus: 5.0
+      success_bonus: 1.0
 
   eval:
     auto_reset: false

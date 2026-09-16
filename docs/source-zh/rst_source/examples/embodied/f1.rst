@@ -111,7 +111,8 @@ TensorBoard 写入 ``bc/loss`` 和 ``bc/action_mae`` 曲线点的频率。共享
 物理包围盒内侧，为跟踪误差预留空间。该配置只使用 online replay 训练 SAC：
 ``algorithm.demo_buffer`` 为 null，``algorithm.bc_warmup_updates`` 为零。上真机前，
 第一阶段课程使用 XY 10 mm、Z 5 mm 的成功容差，并要求连续保持 3 步；后续精确阶段
-再收紧容差。
+再收紧容差。首次成功步骤的 reward 精确为 1.0，并替代该步的 dense progress 和
+step penalty，使 ``env/success_once`` 遵循 RealWorld 的 reward 约定。
 请根据当前机器人设置复核 target pose、reset joint pose、
 ``vendor_to_base_rotation`` 和 workspace offset。
 

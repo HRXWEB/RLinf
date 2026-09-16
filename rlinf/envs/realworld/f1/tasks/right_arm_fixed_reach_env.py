@@ -247,7 +247,7 @@ class RightArmFixedReachEnv(RightArmPegInsertionEnv):
             previous_distance - current_distance
         ) / self.config.position_reward_scale_m - self.config.step_penalty
         if terminal_success:
-            reward += self.config.success_bonus
+            reward = self.config.success_bonus
             self._success_bonus_awarded = True
         self._previous_position = position.copy()
         self._last_task_metrics = self._task_metrics(observation)

@@ -307,6 +307,7 @@ def test_right_arm_reach_config_is_three_dimensional_demo_free_and_full_view(
     assert override.xy_tolerance_m == pytest.approx(0.010)
     assert override.z_tolerance_m == pytest.approx(0.005)
     assert override.success_hold_steps == 3
+    assert override.success_bonus == pytest.approx(1.0)
     assert override.target_tcp_pose_m_deg == pytest.approx(
         [0.4250046, -0.322464341, 0.178732415, 90.0, 0.0, 90.0]
     )

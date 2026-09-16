@@ -372,6 +372,7 @@ def test_fixed_reach_requires_three_consecutive_success_steps_and_bonuses_once(
     env = _make_right_arm_reach_env(
         target_tcp_pose_m_deg=[0.005, 0.0, 0.0, 0.0, 0.0, 0.0],
         success_hold_steps=3,
+        success_bonus=1.0,
     )
     try:
         env.reset()
@@ -391,7 +392,7 @@ def test_fixed_reach_requires_three_consecutive_success_steps_and_bonuses_once(
         assert reward_1 < 5.0
         assert reward_2 < 5.0
         assert reward_3 < 5.0
-        assert reward_4 == pytest.approx(4.99)
+        assert reward_4 == pytest.approx(1.0)
         assert not terminated_1
         assert not terminated_away
         assert not terminated_2
